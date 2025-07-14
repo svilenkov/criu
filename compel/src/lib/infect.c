@@ -17,6 +17,7 @@
 
 #include <compel/plugins/std/syscall-codes.h>
 #include <compel/plugins/std/asm/syscall-types.h>
+#include "debug.h"
 #include "uapi/compel/plugins/std/syscall.h"
 #include "asm/infect-types.h"
 #include "asm/sigframe.h"
@@ -374,13 +375,29 @@ int compel_resume_task(pid_t pid, int orig_st, int st)
 int compel_resume_task_sig(pid_t pid, int orig_st, int st, int stop_signo)
 {
 	int ret = 0;
+	pr_info("compel_resume_task_sig: pid=%d, orig_st=%d, st=%d, stop_signo=%d\n", pid, orig_st, st, stop_signo);
+
+	// siginfo_t siginfo;
+
+    // // Query signal info on stopped task
+    // if (ptrace(PTRACE_GETSIGINFO, pid, NULL, &siginfo) == -1) {
+    //     pr_perror("ptrace GETSIGINFO failed");
+    //     return -1;
+    // }
+
+    // if (siginfo.si_signo == SIGSEGV) {
+    //     pr_debug("Task %d stopped due to SIGSEGV\n", pid);
+    //     // Handle SIGSEGV case here, e.g., log, decide special action, or skip kill()
+    // }
 
 	pr_debug("\tUnseizing %d into %d\n", pid, st);
 
 	if (st == COMPEL_TASK_DEAD) {
+		pr_info("%s:%d → COMPEL_TASK_DEAD", __func__, __LINE__);
 		kill(pid, SIGKILL);
 		return 0;
 	} else if (st == COMPEL_TASK_STOPPED) {
+		pr_info("%s:%d → COMPEL_TASK_STOPPED", __func__, __LINE__);
 		/*
 		 * Task might have had STOP in queue. We detected such
 		 * guy as COMPEL_TASK_STOPPED, but cleared signal to run
@@ -390,22 +407,27 @@ int compel_resume_task_sig(pid_t pid, int orig_st, int st, int stop_signo)
 		 */
 		kill(pid, SIGSTOP);
 	} else if (st == COMPEL_TASK_ALIVE) {
+		pr_info("%s:%d → COMPEL_TASK_ALIVE\n", __func__, __LINE__);
 		/*
 		 * Same as in the comment above -- there might be a
 		 * task with STOP in queue that would get lost after
 		 * detach, so stop it again.
 		 */
 		if (orig_st == COMPEL_TASK_STOPPED) {
+			pr_info("%s:%d → COMPEL_TASK_STOPPED\n", __func__, __LINE__);
 			/*
 			 * Check that stop_signo contain supported stop signal.
 			 * If it isn't, then send SIGSTOP. It makes sense in the case
 			 * when we get COMPEL_TASK_STOPPED from old image,
 			 * where stop_signo was not yet supported.
 			 */
-			if (sig_stop(stop_signo))
+			if (sig_stop(stop_signo)) {
+				pr_info("%s:%d → NO SIGSTOP\n", __func__, __LINE__);
 				kill(pid, stop_signo);
-			else
+			} else {
+				pr_info("%s:%d → SIGSTOP OK]\n", __func__, __LINE__);
 				kill(pid, SIGSTOP);
+			}
 		}
 	} else {
 		pr_err("Unknown final state %d\n", st);
@@ -531,6 +553,14 @@ static int parasite_run(pid_t pid, int cmd, unsigned long ip, void *stack, user_
 		goto err_regs;
 	}
 
+	// pr_info("GCS (TPIDR2_EL0): %p, stack: %p, remote_map: %p, map_length: 0x%lx\n",
+	pr_info("parasite_run: About to PTRACE_SETREGS for pid=%d\n", pid);
+	pr_info("  -> ip: %p, sp: %p\n", (void *)ip, (void *)regs->sp);
+	// for (int i = 0; i < 31; i++)
+    // 	pr_info("  x[%02d]: 0x%llx\n", i, regs->regs[i]);
+
+    // todo_read_tpidr2(), regs->sp, ctl->remote_map, ctl->map_length);
+
 	if (ptrace(cmd, pid, NULL, NULL)) {
 		pr_perror("Can't run parasite at %d", pid);
 		goto err_cont;
@@ -551,14 +581,26 @@ err_sig:
 static int restore_thread_ctx(int pid, struct thread_ctx *ctx, bool restore_ext_regs)
 {
 	int ret = 0;
+	struct user_gcs gcs;
+	struct iovec gcs_iov = { .iov_base = &gcs, .iov_len = sizeof(gcs) };
+
+	pr_debug("Inside %s %s:%d\n", __func__, __FILE__, __LINE__);
+	pr_debug("\tOLD SP=%lx IP=%lx\n", (uint64_t) ctx->regs.sp, (uint64_t) ctx->regs.pc);
 
 	if (ptrace_set_regs(pid, &ctx->regs)) {
 		pr_perror("Can't restore registers (pid: %d)", pid);
 		ret = -1;
 	}
 
+	pr_debug("\tNEW SP=%lx IP=%lx\n", (uint64_t) ctx->regs.sp, (uint64_t) ctx->regs.pc);
+	pr_debug("after ptrace_set_regs() %s %s:%d\n",  __func__, __FILE__, __LINE__);
+
 	if (restore_ext_regs && compel_set_task_ext_regs(pid, &ctx->ext_regs))
 		ret = -1;
+
+	ptrace(PTRACE_GETREGSET, pid, 0x410 , &gcs_iov);
+	ctx->ext_regs.gcs = gcs;
+	compel_set_task_gcs_regs(pid, &ctx->ext_regs);
 
 	if (ptrace(PTRACE_SETSIGMASK, pid, sizeof(k_rtsigset_t), &ctx->sigmask)) {
 		pr_perror("Can't block signals");
@@ -601,10 +643,15 @@ static int parasite_trap(struct parasite_ctl *ctl, pid_t pid, user_regs_struct_t
 		goto err;
 	}
 
+	pr_debug("si_add %lx pc %lx sp %lx ctl->ictx.syscall_ip %lx\n", (long)siginfo.si_addr, (long)regs->pc, (long)regs->sp, (long)ctl->ictx.syscall_ip);
 	if (WSTOPSIG(status) != SIGTRAP || siginfo.si_code != ARCH_SI_TRAP) {
-		pr_debug("** delivering signal %d si_code=%d\n", siginfo.si_signo, siginfo.si_code);
+		// pr_debug("** delivering signal %d si_code=%d\n", siginfo.si_signo, siginfo.si_code);
+		pr_debug("** delivering  signal %d si_code=%d\n, fault address=%p\n", siginfo.si_signo, siginfo.si_code, siginfo.si_addr);
 
+		pr_debug("REG_IP = 0x%llx\n", (unsigned long long) REG_IP(*regs));
 		pr_err("Unexpected %d task interruption, aborting\n", pid);
+
+		// *(int*)0 = 0;
 		goto err;
 	}
 
@@ -614,11 +661,37 @@ static int parasite_trap(struct parasite_ctl *ctl, pid_t pid, user_regs_struct_t
 	 */
 	ret = 0;
 err:
-	if (restore_thread_ctx(pid, octx, may_use_extended_regs))
+	pr_debug("about to call: restore_thread_ctx %s:%d\n", __FILE__, __LINE__);
+	if (restore_thread_ctx(pid, octx, may_use_extended_regs)) {
 		ret = -1;
+	}
 
 	return ret;
 }
+
+void *remote_map_shadow_stack(struct parasite_ctl *ctl, void *addr, size_t length, int flags)
+{
+	long gcs = 0;
+	int err;
+
+	pr_debug("map_shadow_stack: addr=%p len=%zu flags=0x%x\n", addr, length, flags);
+
+	// err = compel_syscall(ctl, __NR_mmap, &map, (unsigned long)addr, length, prot, flags, fd, offset);
+	err = compel_syscall(ctl, __NR_map_shadow_stack, &gcs,
+	                     0, length, flags,
+	                     0, 0, 0); // pad remaining args
+	if (err < 0 || gcs == -1)
+		gcs = 0;
+
+	pr_debug("✅ remote shadow stack mapped at %p\n", (void *)gcs);
+
+	return (void *)gcs;
+}
+
+
+#define SHADOW_STACK_SET_MARKER (1ULL << 1)
+#define SHADOW_STACK_SET_TOKEN (1ULL << 0)
+
 
 int compel_execute_syscall(struct parasite_ctl *ctl, user_regs_struct_t *regs, const char *code_syscall)
 {
@@ -636,10 +709,40 @@ int compel_execute_syscall(struct parasite_ctl *ctl, user_regs_struct_t *regs, c
 		return -1;
 	}
 
-	err = parasite_run(pid, PTRACE_CONT, ctl->ictx.syscall_ip, 0, regs, &ctl->orig);
-	if (!err)
+	pr_info("parasite_run: pid=%d, syscall_ip=0x%lx, sp=0x%lx, regs=%p, orig=%p\n",
+        pid,
+        ctl->ictx.syscall_ip,
+        (unsigned long)ctl->orig.regs.sp,
+        regs,
+        &ctl->orig);
+
+	err = parasite_run(pid, PTRACE_CONT, ctl->ictx.syscall_ip, (void *)ctl->orig.regs.sp, regs, &ctl->orig);
+	pr_info("CALLING compel_execute_syscall > parasite_trap\n");
+
+	if (!err) {
+		pr_info("parasite_trap: ctl=%p, pid=%d, regs=%p, orig=%p, in_syscall=%s\n",
+            ctl,
+            pid,
+            regs,
+            &ctl->orig,
+            "false");
 		err = parasite_trap(ctl, pid, regs, &ctl->orig, false);
 
+		/*
+		* Kernel increments PC by 4 after the SVC.
+		* Rewind it so the task re-executes the original instruction we
+		* restored with ptrace_poke_area() below.
+		*/
+		// if (!err) {
+		// 		regs->pc = ctl->orig.regs.pc;
+		// 		// regs->pc = ctl->ictx.syscall_ip;
+		// 		if (ptrace_set_regs(pid, regs)) {
+		// 				pr_perror("Can't rewind PC (pid %d)", pid);
+		// 				err = -1;
+		// 		}
+		// }
+
+	}
 	if (ptrace_poke_area(pid, (void *)code_orig, (void *)ctl->ictx.syscall_ip, sizeof(code_orig))) {
 		pr_err("Can't restore syscall blob (pid: %d)\n", ctl->rpid);
 		err = -1;
@@ -726,6 +829,13 @@ static int parasite_init_daemon(struct parasite_ctl *ctl)
 	}
 
 	ctl->sigreturn_addr = (void *)(uintptr_t)args->sigreturn_addr;
+
+	pr_info("parasite_init_daemon: sigreturn_addr=0x%lx sigframe=%ld page_size=0x%lx\n",
+		args->sigreturn_addr,
+		args->sigframe,
+		(unsigned long)__page_size
+	);
+
 	ctl->daemonized = true;
 	pr_info("Parasite %d has been switched to daemon mode\n", pid);
 	return 0;
@@ -733,17 +843,80 @@ err:
 	return -1;
 }
 
+void dump_stack(pid_t pid, uint64_t sp, int slots) {
+    uint64_t buf[slots];
+    struct iovec local = { .iov_base = buf, .iov_len = sizeof(buf) };
+    struct iovec remote = { .iov_base = (void*)sp, .iov_len = sizeof(buf) };
+
+    ssize_t n = process_vm_readv(pid, &local, 1, &remote, 1, 0);
+    if (n != sizeof(buf)) {
+        pr_perror("process_vm_readv victim stack");
+        return;
+    }
+
+    pr_debug("🪜 Victim stack dump from SP=0x%llx:\n", (unsigned long long)sp);
+    for (int i = 0; i < slots; ++i) {
+        uint64_t slot_addr = sp + i * 8;
+        pr_debug("[%2d] 0x%016llx : 0x%016llx%s\n",
+               i,
+               (unsigned long long)slot_addr,
+               (unsigned long long)buf[i],
+               (i == 0) ? " <=== SP" : "");
+    }
+}
+
+void print_sigframe_table(const struct rt_sigframe *f) {
+    const struct cr_sigcontext *sc = RT_SIGFRAME_SIGCONTEXT(f);
+
+
+    pr_debug("\n+-------------------[ rt_sigframe at: 0x%016" PRIx64 " ]-------------------+\n", (uint64_t)(uintptr_t)f);
+    pr_debug("| %-12s | 0x%016" PRIx64 " |\n", "fault_address", (uint64_t)sc->fault_address);
+    pr_debug("| %-12s | 0x%016" PRIx64 " |\n", "sp",          (uint64_t)sc->sp);
+    pr_debug("| %-12s | 0x%016" PRIx64 " |\n", "pc",          (uint64_t)sc->pc);
+    pr_debug("| %-12s | 0x%016" PRIx64 " |\n", "pstate",      (uint64_t)sc->pstate);
+    pr_debug("+-----------------------------------------------------+\n");
+    pr_debug("| %-12s | %-16s |\n", "Register", "Value");
+    for (int i = 0; i < 31; i++) {
+        pr_debug("| x%-11d | 0x%016" PRIx64 " |\n", i, (uint64_t)sc->regs[i]);
+    }
+    pr_debug("+-----------------------------------------------------+\n");
+    pr_debug("| %-12s | 0x%016" PRIx64 " |\n", "fp", (uint64_t)f->fp);
+    pr_debug("| %-12s | 0x%016" PRIx64 " |\n", "lr", (uint64_t)f->lr);
+    pr_debug("+-----------------------------------------------------+\n");
+
+    // Print first few bytes of __reserved (FPU/SIMD context marker)
+    pr_debug("| %-12s |", "__reserved[0..15]");
+    for (int i = 0; i < 16; ++i)
+        pr_debug(" %02x", sc->__reserved[i]);
+    pr_debug(" |\n");
+    pr_debug("+-----------------------------------------------------+\n");
+
+	// const struct gcs_context *gcs = RT_SIGFRAME_GCS(f);
+	// pr_debug("+-------------------[ GCS Context ]-------------------+\n");
+	// pr_debug("| %-12s | 0x%016llx |\n", "gcspr", gcs->gcspr);
+	// pr_debug("| %-12s | 0x%016llx |\n", "features", gcs->features_enabled);
+	// pr_debug("| %-12s | 0x%08x       |\n", "magic", gcs->head.magic);
+	// pr_debug("| %-12s | %llu bytes   |\n", "size", gcs->head.size);
+	// pr_debug("+-----------------------------------------------------+\n");
+}
+
+
 static int parasite_start_daemon(struct parasite_ctl *ctl)
 {
 	pid_t pid = ctl->rpid;
 	struct infect_ctx *ictx = &ctl->ictx;
 	user_fpregs_struct_t ext_regs;
 
+	struct user_gcs gcs;
+	struct iovec iov = { .iov_base = &gcs, .iov_len = sizeof(gcs) };
+
 	/*
 	 * Get task registers before going daemon, since the
 	 * compel_get_task_regs() needs to call ptrace on _stopped_ task,
 	 * while in daemon it is not such.
 	 */
+
+	pr_debug("in function parasite_start_daemon\n");
 
 	if (compel_get_task_regs(pid, &ctl->orig.regs, &ext_regs, ictx->save_regs, ictx->regs_arg, ictx->flags)) {
 		pr_err("Can't obtain regs for thread %d\n", pid);
@@ -755,11 +928,31 @@ static int parasite_start_daemon(struct parasite_ctl *ctl)
 		return -1;
 	}
 
-	if (ictx->make_sigframe(ictx->regs_arg, ctl->sigframe, ctl->rsigframe, &ctl->orig.sigmask))
+	// print_sigframe_table(ctl->sigframe);
+	// print_sigframe_table(ctl->rsigframe);
+
+	pr_debug("About to call ictx->make_sigframe\n");
+	pr_debug("➡️ Current regs: PC=0x%llx SP=0x%llx x30=0x%llx\n",
+		(unsigned long long)ctl->orig.regs.pc,
+		(unsigned long long)ctl->orig.regs.sp,
+		(unsigned long long)ctl->orig.regs.regs[30]);
+
+	if (ictx->make_sigframe(ictx->regs_arg, ctl->sigframe, ctl->rsigframe, &ctl->orig.sigmask, pid))
 		return -1;
 
 	if (parasite_setup_shstk(ctl, &ext_regs))
 		return -1;
+
+	if (parasite_setup_gcs(ctl))
+		return -1;
+
+	pr_debug("➡️ GCSPR_EL0 after sigframe: 0x%llx", (unsigned long long) gcs.gcspr_el0);
+	if (ptrace(PTRACE_GETREGSET, pid, 0x410, &iov)) {
+		pr_perror("PTRACE_GETREGSET failed");
+		return -1;
+	}
+	dump_gcs_slots(pid, gcs.gcspr_el0, 0, 0);
+	dump_stack(pid, (uint64_t) ctl->orig.regs.sp -16, 12);
 
 	if (parasite_init_daemon(ctl))
 		return -1;
@@ -978,6 +1171,8 @@ int compel_infect_no_daemon(struct parasite_ctl *ctl, unsigned long nr_threads, 
 	int ret;
 	unsigned long p, map_exchange_size, parasite_size = 0;
 
+	pr_debug("in function compel_infect_no_daemon\n");
+
 	if (ctl->pblob.parasite_type != COMPEL_BLOB_CHEADER)
 		goto err;
 
@@ -1093,11 +1288,15 @@ err:
 
 int compel_infect(struct parasite_ctl *ctl, unsigned long nr_threads, unsigned long args_size)
 {
-	if (compel_infect_no_daemon(ctl, nr_threads, args_size))
+	if (compel_infect_no_daemon(ctl, nr_threads, args_size)) {
+		pr_debug("[compel_infect: FAILED compel_infect_no_daemon");
 		return -1;
+	}
 
-	if (parasite_start_daemon(ctl))
+	if (parasite_start_daemon(ctl)) {
+		pr_debug("[compel_infect: FAILED parasite_start_daemon");
 		return -1;
+	}
 
 	return 0;
 }
@@ -1308,30 +1507,51 @@ static int save_regs_plain(pid_t pid, void *to, user_regs_struct_t *r, user_fpre
 	return 0;
 }
 
-static int make_sigframe_plain(void *from, struct rt_sigframe *f, struct rt_sigframe *rtf, k_rtsigset_t *b)
+
+// void dump_sigframe(void *ptr, size_t len) {
+//     unsigned char *p = ptr;
+//     printf("Sigframe dump (%zu bytes at %p):\n", len, ptr);
+//     for (size_t i = 0; i < len; i++) {
+//         printf("%02x ", p[i]);
+//         if ((i+1) % 16 == 0) puts("");
+//     }
+//     puts("");
+// }
+
+static int make_sigframe_plain(void *from, struct rt_sigframe *f, struct rt_sigframe *rtf, k_rtsigset_t *b, pid_t pid)
+
 {
 	struct plain_regs_struct *prs = from;
+	pr_debug("\t[make_sigframe_plain] >");
+	pr_debug("PID: %d", pid);
 
 	/*
 	 * Make sure it's zeroified.
 	 */
 	memset(f, 0, sizeof(*f));
 
+	pr_debug("before sigreturn_prep_regs_plain()");
 	if (sigreturn_prep_regs_plain(f, &prs->regs, &prs->fpregs))
-		return -1;
+	return -1;
 
-	if (b)
+	if (b) {
+		pr_debug("about to call rt_sigframe_copy_sigset()");
 		rt_sigframe_copy_sigset(f, b);
+	}
 
 	if (RT_SIGFRAME_HAS_FPU(f)) {
-		if (sigreturn_prep_fpu_frame_plain(f, rtf))
+		pr_debug("about to call sigreturn_prep_fpu_frame_plain()");
+		if (sigreturn_prep_fpu_frame_plain(f, rtf)) {
+			pr_debug("ERROR in call sigreturn_prep_fpu_frame_plain()");
 			return -1;
+		}
 	}
 
 	/*
 	 * FIXME What about sas?
 	 * setup_sas(sigframe, core->thread_core->sas);
 	 */
+	print_sigframe_table(f);
 
 	return 0;
 }
@@ -1340,6 +1560,8 @@ struct parasite_ctl *compel_prepare(int pid)
 {
 	struct parasite_ctl *ctl;
 	struct infect_ctx *ictx;
+
+	pr_debug("compel_prepare(%d)", pid);
 
 	ctl = compel_prepare_noctx(pid);
 	if (ctl == NULL)
@@ -1354,6 +1576,7 @@ struct parasite_ctl *compel_prepare(int pid)
 
 	ictx->save_regs = save_regs_plain;
 	ictx->make_sigframe = make_sigframe_plain;
+
 	ictx->regs_arg = xmalloc(sizeof(struct plain_regs_struct));
 	if (ictx->regs_arg == NULL)
 		goto err;
@@ -1380,23 +1603,99 @@ static bool task_in_parasite(struct parasite_ctl *ctl, user_regs_struct_t *regs)
 	return addr >= ctl->remote_map && addr < ctl->remote_map + ctl->map_length;
 }
 
+void dump_mem_via_dd(pid_t pid, unsigned long pc) {
+    char cmd[256];
+    FILE *fp;
+    char line[256];
+	unsigned long offset;
+    unsigned long base = pc - 32;
+	char rest[200];
+
+    snprintf(cmd, sizeof(cmd),
+        "dd if=/proc/%d/mem bs=1 skip=%lu count=64 of=/tmp/memchunk.bin 2>/dev/null && "
+        "objdump -D -b binary -m aarch64 /tmp/memchunk.bin",
+        pid, base);
+
+    fp = popen(cmd, "r");
+    if (!fp) {
+        perror("popen failed");
+        return;
+    }
+
+    pr_debug("===== dd | objdump output =====\n");
+    while (fgets(line, sizeof(line), fp)) {
+        // remove trailing newline
+        line[strcspn(line, "\n")] = '\0';
+
+        // try to parse objdump line: "   0:   d4000001        svc     #0x0"
+
+        if (sscanf(line, " %lx: %[^\n]", &offset, rest) == 2) {
+            pr_debug("0x%lx:\t%s\n", base + offset, rest);
+        } else {
+            // non-instruction line, just print as-is
+            pr_debug("%s\n", line);
+        }
+    }
+    pr_debug("===============================\n");
+
+    pclose(fp);
+}
+
+static void dump_proc_maps(pid_t pid) {
+	char path[64];
+	FILE *fp;
+	char line[512];
+
+	snprintf(path, sizeof(path), "/proc/%d/maps", pid);
+
+	fp = fopen(path, "r");
+	if (!fp) {
+		pr_err("Failed to open %s\n", path);
+		return;
+	}
+	pr_debug("===== /proc/%d/maps =====\n", pid);
+
+	while (fgets(line, sizeof(line), fp)) {
+		// Remove potential trailing newline
+		line[strcspn(line, "\n")] = 0;
+		pr_debug("%s\n", line);
+	}
+
+	// dd if=/proc/<pid>/mem bs=1 skip=<PC> count=16 | hexdump -C
+
+	fclose(fp);
+	pr_debug("=========================\n");
+}
+
+
 static int parasite_fini_seized(struct parasite_ctl *ctl)
 {
 	pid_t pid = ctl->rpid;
 	user_regs_struct_t regs;
 	int status, ret = 0;
+	// void* gcs;
+	// struct iovec iov;
+
+	struct user_gcs g;
+	struct iovec gcs_iov = { .iov_base = &g, .iov_len = sizeof(g) };
+	uint64_t expected_cap;
+
+	unsigned long sa_restorer = ctl->parasite_ip;
 
 	/* stop getting chld from parasite -- we're about to step-by-step it */
+	pr_debug("About to call restore_child_handler in %s:%d#%s\n", __FILE__, __LINE__, __func__);
 	if (restore_child_handler(ctl))
 		return -1;
 
 	/* Start to trace syscalls for each thread */
+	pr_debug("About to call ptrace(PTRACE_INTERRUPT for each thread in %s:%d#%s\n", __FILE__, __LINE__, __func__);
 	if (ptrace(PTRACE_INTERRUPT, pid, NULL, NULL)) {
 		pr_perror("Unable to interrupt the process");
 		return -1;
 	}
 
 	pr_debug("Waiting for %d to trap\n", pid);
+	// pr_debug("About to call wait4(%d) for each thread in %s:%d#%s\n", pid, __FILE__, __LINE__, __func__);
 	if (wait4(pid, &status, __WALL, NULL) != pid) {
 		pr_perror("Waited pid mismatch (pid: %d)", pid);
 		return -1;
@@ -1408,29 +1707,94 @@ static int parasite_fini_seized(struct parasite_ctl *ctl)
 		return -1;
 	}
 
+	pr_debug("About to call ptrace_get_regs for each thread in %s:%d#%s\n", __FILE__, __LINE__, __func__);
 	ret = ptrace_get_regs(pid, &regs);
 	if (ret) {
 		pr_perror("Unable to get registers");
 		return -1;
 	}
 
+	pr_debug("About to call task_in_parasite for each thread in %s:%d#%s\n", __FILE__, __LINE__, __func__);
 	if (!task_in_parasite(ctl, &regs)) {
 		pr_err("The task is not in parasite code\n");
 		return -1;
 	}
 
+	pr_debug("About to call compel_rpc_call(PARASITE_CMD_FINI for each thread in %s:%d#%s\n", __FILE__, __LINE__, __func__);
 	ret = compel_rpc_call(PARASITE_CMD_FINI, ctl);
 	close_safe(&ctl->tsock);
 	if (ret)
 		return -1;
 
 	/* Go to sigreturn as closer as we can */
+	pr_debug("compel_stop_pie(%d, %p for each thread in %s:%d#%s\n", pid, ctl->sigreturn_addr, __FILE__, __LINE__, __func__);
 	ret = compel_stop_pie(pid, ctl->sigreturn_addr, ctl->ictx.flags & INFECT_NO_BREAKPOINTS);
 	if (ret < 0)
 		return ret;
 
-	if (compel_stop_on_syscall(1, __NR(rt_sigreturn, 0), __NR(rt_sigreturn, 1)))
+	sleep(1);
+	if (ptrace(PTRACE_GETREGSET, pid, 0x410 /* NT_ARM_GCS */, &gcs_iov) != 0) {
+        pr_perror("GCS state not available for %d\n", pid);
+        return -1;
+    }
+
+	pr_info("[DBG-pre-sigreturn] pid=%d PC=0x%llx SP=0x%llx GCSPR_EL0=0x%llx\n",
+			ctl->rpid,
+			(unsigned long long)ctl->orig.regs.pc,
+			(unsigned long long)ctl->orig.regs.sp,
+			(unsigned long long)g.gcspr_el0);
+
+	expected_cap = 0xfffff7def000;
+
+	dump_gcs_slots(ctl->rpid, g.gcspr_el0, 0, expected_cap);
+
+	// ptrace(PTRACE_POKEDATA, pid, (void*)g.gcspr_el0, 0xfffff7def000);
+	// sa_restorer = 0xfffff7e795dc;
+	// ptrace(PTRACE_POKEDATA, pid, (void*)g.gcspr_el0, 0xfffff7def000);
+	pr_debug("ctl->parasite_ip: %lx\n",sa_restorer);
+	dump_stack(pid, (uint64_t) regs.sp, 8);
+	// ptrace(PTRACE_POKEDATA, pid, (void*)g.gcspr_el0 - 8, sa_restorer);
+
+	// g.gcspr_el0 = g.gcspr_el0 + sizeof(uint64_t);
+
+	// iov.iov_base = &g;
+	// iov.iov_len = sizeof(*&g);
+	// if(ptrace(PTRACE_SETREGSET, pid, 0x410, &iov)) {
+	// 	pr_perror("PTRACE_SETREGSET FIALED");
+	// 	return -1;
+	// }
+
+	// ptrace(PTRACE_POKEDATA, pid, (void*)g.gcspr_el0-8, 0xDEADBEEFDEADBEEC);
+	// ptrace(PTRACE_POKEDATA, pid, (void*)g.gcspr_el0-16, 0xDEADBEEFDEADBEED);
+	// ptrace(PTRACE_POKEDATA, pid, (void*)g.gcspr_el0+16, 0xDEADBEEFDEADBEE);
+
+	pr_info("➡️ Waiting for task to enter & exit syscall: %d\n", __NR_rt_sigreturn);
+
+	pr_debug("DUMPING /proc/%d/maps 💩 compel_stop_on_syscall\n", pid);
+	dump_proc_maps(pid);
+
+	pr_debug("Dumping mem for ctl->orig.regs.pc=%llx\n", ctl->orig.regs.pc);
+	dump_mem_via_dd(pid, ctl->orig.regs.pc);
+
+	pr_debug("Dumping mem for regs.pc=%llx\n", regs.pc);
+	dump_mem_via_dd(pid, regs.pc);
+
+	if (compel_stop_on_syscall(1, __NR(rt_sigreturn, 0), __NR(rt_sigreturn, 1))) {
+		pr_err("❌ compel_stop_on_syscall() failed while waiting for rt_sigreturn\n");
 		return -1;
+	}
+	dump_gcs_slots(pid, g.gcspr_el0, 0, expected_cap);
+	// dump_stack(pid, (uint64_t) ctl->orig.regs.sp, 8);
+	// dump_stack(pid, (uint64_t) ctl->orig.regs.regs[2], 8);
+	// dump_stack(pid, (uint64_t) ctl->rstack, 8);
+
+	pr_info("[POST-sigreturn] pid=%d PC=0x%llx x30=0x%llx SP=0x%llx GCSPR_EL0=0x%llx\n",
+			ctl->rpid,
+			(unsigned long long)ctl->orig.regs.pc,
+			(unsigned long long)ctl->orig.regs.regs[30],
+			(unsigned long long)ctl->orig.regs.sp,
+			(unsigned long long)g.gcspr_el0);
+	pr_info("✅ Task completed rt_sigreturn syscall (trapped on exit)\n");
 
 	/*
 	 * All signals are unblocked now. The kernel notifies about leaving
@@ -1456,6 +1820,7 @@ int compel_stop_daemon(struct parasite_ctl *ctl)
 		if (ctl->tsock < 0)
 			return -1;
 
+		pr_debug("About to call parasite_fini_seized in %s:%d#%s\n", __FILE__, __LINE__, __func__);
 		if (parasite_fini_seized(ctl)) {
 			close_safe(&ctl->tsock);
 			return -1;
@@ -1471,17 +1836,46 @@ int compel_cure_remote(struct parasite_ctl *ctl)
 {
 	long ret;
 	int err;
+	struct user_gcs gcs;
+	struct iovec gcs_iov = { .iov_base = &gcs, .iov_len = sizeof(gcs) };
+	// uint64_t test_value;
+
+	pr_info("Curing remote (%s) \n", __FILE__);
 
 	if (compel_stop_daemon(ctl))
 		return -1;
 
+	pr_info("compel_stop_daemon ✅\n");
+	print_callstack();
+	dump_stack(ctl->rpid, (uint64_t) ctl->orig.regs.sp, 8);
+
+	ptrace(PTRACE_GETREGSET, ctl->rpid, 0x410, &gcs_iov);
+	dump_gcs_slots(ctl->rpid, gcs.gcspr_el0, 0, 0);
+
+	// __FILE__, __LINE__,
 	if (!ctl->remote_map)
 		return 0;
+
+	// ctl->orig.regs.sp = (gcs.gcspr_el0 + 0x10) & ~0xF;
+	// ctl->orig.regs.pc = ctl->orig.regs.regs[30];
+
+	pr_debug("[compel_cure_remote]: ctl->orig.regs.sp = %llx\n",  (unsigned long long)ctl->orig.regs.sp);
+	pr_debug("[compel_cure_remote]: ctl->orig.regs.pc = %llx\n",  (unsigned long long)ctl->orig.regs.pc);
+
+
+	// if (ptrace(PTRACE_PEEKDATA, ctl->rpid, (void*)ctl->orig.regs.sp, &test_value) == -1) {
+	// 	pr_perror("Stack at 0x%llx is not accessible: %s", (unsigned long long) ctl->orig.regs.sp, strerror(errno));
+	// 	return -1;
+	// } else {
+	// 	pr_info("Stack at 0x%llx is accessible, value: 0x%llx", (unsigned long long) ctl->orig.regs.sp, (unsigned long long) test_value);
+	// }
 
 	err = compel_syscall(ctl, __NR(munmap, !compel_mode_native(ctl)), &ret, (unsigned long)ctl->remote_map,
 			     ctl->map_length, 0, 0, 0, 0);
 	if (err)
 		return err;
+
+	pr_info("compel_syscall ✅\n");
 
 	if (ret) {
 		pr_err("munmap for remote map %p, %lu returned %lu\n", ctl->remote_map, ctl->map_length, ret);
@@ -1494,6 +1888,7 @@ int compel_cure_remote(struct parasite_ctl *ctl)
 int compel_cure_local(struct parasite_ctl *ctl)
 {
 	int ret = 0;
+	pr_info("Curing local\n");
 
 	if (ctl->local_map) {
 		if (munmap(ctl->local_map, ctl->map_length)) {
@@ -1509,6 +1904,8 @@ int compel_cure_local(struct parasite_ctl *ctl)
 int compel_cure(struct parasite_ctl *ctl)
 {
 	int ret;
+
+	pr_info("compel_cure");
 
 	ret = compel_cure_remote(ctl);
 	if (!ret)
@@ -1630,11 +2027,20 @@ static bool task_is_trapped(int status, pid_t pid)
 
 static inline int is_required_syscall(user_regs_struct_t *regs, pid_t pid, const int sys_nr, const int sys_nr_compat)
 {
+	struct user_gcs gcs;
+	struct iovec gcs_iov = { .iov_base = &gcs, .iov_len = sizeof(gcs) };
 	const char *mode = user_regs_native(regs) ? "native" : "compat";
 	int req_sysnr = user_regs_native(regs) ? sys_nr : sys_nr_compat;
 
 	pr_debug("%d (%s) is going to execute the syscall %lu, required is %d\n", pid, mode, REG_SYSCALL_NR(*regs),
 		 req_sysnr);
+
+	if (ptrace(PTRACE_GETREGSET, pid, 0x410, &gcs_iov) != 0) {
+        pr_perror("GCS state not available for %d\n", pid);
+        return -1;
+    }
+
+	dump_gcs_slots(pid, gcs.gcspr_el0, 0, 0xfffff7def000);
 
 	return (REG_SYSCALL_NR(*regs) == req_sysnr);
 }
@@ -1652,6 +2058,8 @@ int compel_stop_on_syscall(int tasks, const int sys_nr, const int sys_nr_compat)
 	user_regs_struct_t regs;
 	int status, ret;
 	pid_t pid;
+	struct user_gcs gcs;
+	struct iovec gcs_iov = { .iov_base = &gcs, .iov_len = sizeof(gcs) };
 
 	/* Stop all threads on the enter point in sys_rt_sigreturn */
 	while (tasks) {
@@ -1661,8 +2069,19 @@ int compel_stop_on_syscall(int tasks, const int sys_nr, const int sys_nr_compat)
 			return -1;
 		}
 
-		if (!task_is_trapped(status, pid))
+		pr_info("wait4: pid=%d status=0x%x\n", pid, status);
+		if (!task_is_trapped(status, pid)) {
+			pr_debug("\t 😦 oh noo IT'S A TRAP!\n");
+			ptrace(PTRACE_GETREGSET, pid, 0x410 , &gcs_iov);
+			dump_stack(pid, regs.sp, 8);
+			dump_gcs_slots(pid, gcs.gcspr_el0, 0, 0xfffff7def000);
+			pr_err("💥 Crash: PID=%d PC=0x%llx SP=0x%llx REGS[8]=0x%llx\n",
+       			pid, regs.pc, regs.sp, regs.regs[8]);
+			pr_err("task_is_trapped() failed for pid=%d status=0x%x\n", pid, status);
+			dump_proc_maps(pid);
+			dump_mem_via_dd(pid, regs.pc);
 			return -1;
+		}
 
 		pr_debug("%d was trapped\n", pid);
 
@@ -1692,7 +2111,27 @@ int compel_stop_on_syscall(int tasks, const int sys_nr, const int sys_nr_compat)
 			return -1;
 		}
 
+		// pr_debug("[TRACE] pid=%d at syscall %llu (wanted: %d/%d)\n",
+		// 		pid, (unsigned long long)regs.regs[8], sys_nr, sys_nr_compat);
+
 		if (is_required_syscall(&regs, pid, sys_nr, sys_nr_compat)) {
+
+			// Hacks Ahead
+			if (sys_nr == 139) {
+				// 	dump_gcs_slots(pid, gcs.gcspr_el0, 0, 0xfffff7def000);
+				// 	// cap
+				// pr_debug("is_required_syscall -> st_sigrekeke\n");
+				// ptrace(PTRACE_GETREGSET, pid, 0x410 , &gcs_iov);
+				// gcs.gcspr_el0 = 0x0000fffff7deffc8;
+				// ptrace(PTRACE_SETREGSET, pid, 0x410, &gcs_iov);
+				// ptrace(PTRACE_POKEDATA, pid, (void*)gcs.gcspr_el0, 0x0000fffff7def000);
+			// 	// ptrace(PTRACE_POKEDATA, pid, (void*)gcs.gcspr_el0-8, 0xfffff7def000);
+			// 	// gcs.gcspr_el0 -= 8;
+			// 	ptrace(PTRACE_GETREGSET, pid, 0x410, &gcs_iov);
+			// 	dump_gcs_slots(pid, gcs.gcspr_el0, 0, 0xfffff7def000);
+			// 	dump_stack(pid, regs.sp, 8);
+			}
+
 			/*
 			 * The process is going to execute the required syscall,
 			 * the next stop will be on the exit from this syscall

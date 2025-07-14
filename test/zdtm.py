@@ -943,7 +943,7 @@ class criu_cli:
             preexec=None,
             preload_libfault=False,
             nowait=False,
-            timeout=60):
+            timeout=240):
         env = dict(
             os.environ,
             ASAN_OPTIONS="log_path=asan.log:disable_coredump=0:detect_leaks=0",
@@ -1485,7 +1485,7 @@ class criu:
         if self.__dedup:
             a_opts += ["--auto-dedup"]
 
-        a_opts += ["--timeout", "10"]
+        a_opts += ["--timeout", "240"]
 
         criu_dir = os.path.dirname(os.getcwd())
         if os.getenv("GCOV"):

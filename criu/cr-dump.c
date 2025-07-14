@@ -1605,6 +1605,7 @@ static int dump_one_task(struct pstree_item *item, InventoryEntry *parent_ie)
 		goto err;
 	}
 
+	pr_debug("About to call parasite_infect_seized in: %s:%d#%s\n", __FILE__, __LINE__, __func__);
 	parasite_ctl = parasite_infect_seized(pid, item, &vmas);
 	if (!parasite_ctl) {
 		pr_err("Can't infect (pid: %d) with parasite\n", pid);
@@ -1727,6 +1728,7 @@ static int dump_one_task(struct pstree_item *item, InventoryEntry *parent_ie)
 		goto err_cure;
 	}
 
+	pr_debug("About to call compel_stop_daaemon in %s:%d#%s\n", __FILE__, __LINE__, __func__);
 	ret = compel_stop_daemon(parasite_ctl);
 	if (ret) {
 		pr_err("Can't stop daemon in parasite (pid: %d)\n", pid);

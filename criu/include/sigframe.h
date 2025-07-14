@@ -9,6 +9,6 @@
 #include "images/core.pb-c.h"
 
 extern int construct_sigframe(struct rt_sigframe *sigframe, struct rt_sigframe *rsigframe, k_rtsigset_t *blkset,
-			      CoreEntry *core);
+			      CoreEntry *core, int pid);
 
 #endif /* __CR_SIGFRAME_H__ */

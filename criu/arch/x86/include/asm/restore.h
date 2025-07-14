@@ -54,6 +54,6 @@ static inline void core_get_tls(CoreEntry *pcore, tls_t *ptls)
 	}
 }
 
-int restore_fpu(struct rt_sigframe *sigframe, CoreEntry *core);
+int restore_fpu(struct rt_sigframe *sigframe, CoreEntry *core, pid_t pid);
 
 #endif

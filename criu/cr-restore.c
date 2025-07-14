@@ -1875,6 +1875,7 @@ static void finalize_restore(void)
 			continue;
 
 		restorer_addr = (unsigned long)rsti(item)->munmap_restorer;
+		pr_debug("about to call: compel_unmap");
 		if (compel_unmap(ctl, restorer_addr))
 			pr_err("Failed to unmap restorer from %d\n", pid);
 
@@ -3427,9 +3428,9 @@ static int sigreturn_restore(pid_t pid, struct task_restore_args *task_args, uns
 		sigframe = (struct rt_sigframe *)&mz[i].rt_sigframe;
 
 #ifdef CONFIG_MIPS
-		if (construct_sigframe(sigframe, sigframe, &mips_blkset, tcore))
+		if (construct_sigframe(sigframe, sigframe, &mips_blkset, tcore, pid))
 #else
-		if (construct_sigframe(sigframe, sigframe, blkset, tcore))
+		if (construct_sigframe(sigframe, sigframe, blkset, tcore, pid))
 #endif
 			goto err;
 

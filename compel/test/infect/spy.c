@@ -5,6 +5,7 @@
 
 #include <compel/log.h>
 #include <compel/infect-rpc.h>
+#include <debug.h>
 
 #include "parasite.h"
 
@@ -112,8 +113,14 @@ int main(int argc, char **argv)
 		return -1;
 	}
 
-	pid = vfork();
+	// print_stack_info("[BEFORE vfork]\n");
+	printf("seten GLIBC_TUNABLES=glibc.cpu.aarch64_gcs=1:glibc.cpu.aarch64_gcs_policy=2\n");
+	setenv("GLIBC_TUNABLES", "glibc.cpu.aarch64_gcs=1:glibc.cpu.aarch64_gcs_policy=2", 1);
+
+	pid = fork();
+
 	if (pid == 0) {
+		// print_stack_info("[AFTER fork]\n");
 		close(p_in[1]);
 		dup2(p_in[0], 0);
 		close(p_in[0]);
@@ -123,6 +130,11 @@ int main(int argc, char **argv)
 		close(p_err[0]);
 		dup2(p_err[1], 2);
 		close(p_err[1]);
+		// char *envp[] = {
+			// 	"GLIBC_TUNABLES=glibc.cpu.aarch64_gcs=1:glibc.cpu.aarch64_gcs_policy=2",
+			// 	NULL
+			// };
+		// execl("./")
 		execl("./victim", "victim", NULL);
 		exit(1);
 	}

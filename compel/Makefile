@@ -27,6 +27,7 @@ lib-y			+= src/lib/infect-rpc.o
 lib-y			+= src/lib/infect-util.o
 lib-y			+= src/lib/infect.o
 lib-y			+= src/lib/ptrace.o
+lib-y     += src/lib/debug.o
 
 ifeq ($(ARCH),x86)
 lib-y			+= arch/$(ARCH)/src/lib/thread_area.o

@@ -107,7 +107,7 @@ struct rt_sigframe;
 
 typedef int (*open_proc_fn)(int pid, int mode, const char *fmt, ...) __attribute__((__format__(__printf__, 3, 4)));
 typedef int (*save_regs_t)(pid_t pid, void *, user_regs_struct_t *, user_fpregs_struct_t *);
-typedef int (*make_sigframe_t)(void *, struct rt_sigframe *, struct rt_sigframe *, k_rtsigset_t *);
+typedef int (*make_sigframe_t)(void *, struct rt_sigframe *, struct rt_sigframe *, k_rtsigset_t *, pid_t pid);
 
 struct infect_ctx {
 	int sock;
@@ -207,6 +207,28 @@ static inline int parasite_setup_shstk(struct parasite_ctl *ctl,
 	return 0;
 }
 #define parasite_setup_shstk parasite_setup_shstk
+#endif
+
+#ifndef compel_gcs_enabled
+static inline bool compel_gcs_enabled(struct user_gcs *gcs)
+{
+	return false;
+}
+#define compel_gcs_enabled compel_gcs_enabled
+#endif
+
+#ifndef parasite_setup_gcs
+static inline int parasite_setup_gcs(struct parasite_ctl *ctl)
+{
+	return 0;
+}
+#define parasite_setup_gcs parasite_setup_gcs
+
+#endif
+
+#ifndef dump_gcs_slots
+static inline void dump_gcs_slots(pid_t pid, uint64_t gcspr_el0) {}
+#define dump_gcs_slots dump_gcs_slots
 #endif
 
 #endif

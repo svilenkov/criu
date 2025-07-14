@@ -85,22 +85,40 @@ static int __parasite_daemon_wait_msg(struct ctl_msg *m)
 
 static noinline unsigned long fini_sigreturn(unsigned long new_sp)
 {
+	pr_debug("About to call ARCH_RT_SIGRETURN: new_sp=0x%lx, sigframe=%p\n", new_sp, sigframe);
 	ARCH_RT_SIGRETURN_DUMP(new_sp, sigframe);
 	return new_sp;
 }
-
+#include <stdio.h>
 static unsigned long fini(void)
 {
 	unsigned long new_sp;
 
+	uint64_t *ptr;
+
+	new_sp = (long)sigframe + RT_SIGFRAME_OFFSET(sigframe);
+	pr_debug("fini()@%s:%d Dumping 64 bytes around new_sp=%p\n", __FILE__, __LINE__, (void *)new_sp);
+	pr_debug("fini: new_sp=0x%lx, REG_IP=0x%lx", new_sp, RT_SIGFRAME_REGIP(sigframe));
+
+	ptr = (uint64_t *)new_sp;
+	for (int i = -4; i < 8; i++)
+		pr_debug("PTR[%d]: %p VAL: 0x%lx\n", i, ptr + i, *(ptr + i));
+
+	pr_debug("fini(): Calling parasite_cleanup()\n");
 	parasite_cleanup();
 
 	new_sp = (long)sigframe + RT_SIGFRAME_OFFSET(sigframe);
+	pr_debug("fini(): After cleanup, sigframe=%p RT_SIGFRAME_OFFSET=%ld new_sp=0x%lx\n", sigframe, (long)RT_SIGFRAME_OFFSET(sigframe), new_sp);
+	pr_debug("fini(): RT_SIGFRAME_REGIP(sigframe)=0x%lx\n", RT_SIGFRAME_REGIP(sigframe));
+
 	pr_debug("%ld: new_sp=%lx ip %lx\n", sys_gettid(), new_sp, RT_SIGFRAME_REGIP(sigframe));
 
 	sys_close(tsock);
+	pr_debug("SYS_CLOSE(TSOCK)\n");
+
 	std_log_set_fd(-1);
 
+	pr_debug("fini(): About to call fini_sigreturn(new_sp=0x%lx)\n", new_sp);
 	return fini_sigreturn(new_sp);
 
 	BUG();
@@ -116,22 +134,26 @@ static noinline __used unsigned long parasite_daemon(void *args)
 	pr_debug("Running daemon thread leader\n");
 
 	/* Reply we're alive */
-	if (__parasite_daemon_reply_ack(PARASITE_CMD_INIT_DAEMON, 0))
+	if (__parasite_daemon_reply_ack(PARASITE_CMD_INIT_DAEMON, 0)) {
+		pr_debug("%s:%d WE're ALIVE", __FILE__, __LINE__);
 		goto out;
+	}
 
 	ret = 0;
 
 	while (1) {
 		if (__parasite_daemon_wait_msg(&m))
-			break;
+		break;
 
 		if (ret && m.cmd != PARASITE_CMD_FINI) {
 			pr_err("Command rejected\n");
 			continue;
 		}
 
-		if (m.cmd == PARASITE_CMD_FINI)
+		if (m.cmd == PARASITE_CMD_FINI) {
+			pr_debug("%s:%d — m.cmd == PARASITE_CMD_FINI\n", __FILE__, __LINE__);
 			goto out;
+		}
 
 		ret = parasite_daemon_cmd(m.cmd, args);
 
@@ -154,10 +176,16 @@ static noinline __used unsigned long parasite_init_daemon(void *data)
 	int ret;
 
 	args->sigreturn_addr = (uint64_t)(uintptr_t)fini_sigreturn;
+
 	sigframe = (void *)(uintptr_t)args->sigframe;
 #ifdef ARCH_HAS_LONG_PAGES
 	__page_size = args->page_size;
 #endif
+
+	pr_info("parasite_init_daemon: sigreturn_addr=0x%lx sigframe=%p page_size=0x%lx\n",
+		args->sigreturn_addr,
+		sigframe,
+		(unsigned long)__page_size);
 
 	ret = tsock = sys_socket(PF_UNIX, SOCK_SEQPACKET, 0);
 	if (tsock < 0) {

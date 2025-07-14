@@ -24,7 +24,7 @@ static inline void core_get_tls(CoreEntry *pcore, tls_t *ptls)
 	*ptls = pcore->ti_aarch64->tls;
 }
 
-int restore_fpu(struct rt_sigframe *sigframe, CoreEntry *core);
+int restore_fpu(struct rt_sigframe *sigframe, CoreEntry *core, int pid);
 
 #define ARCH_RST_INFO y
 struct rst_arch_info {

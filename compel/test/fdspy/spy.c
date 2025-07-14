@@ -91,6 +91,8 @@ static int check_pipe_ends(int wfd, int rfd)
 	struct stat r, w;
 	char aux[4] = "0000";
 
+	fprintf(stderr, "wfd=%d, rfd=%d\n", wfd, rfd);
+
 	printf("Check pipe ends are at hands\n");
 	if (fstat(wfd, &w) < 0) {
 		perror("Can't stat wfd");

@@ -146,6 +146,8 @@ static int save_pac_keys(int pid, CoreEntry *core)
 int save_task_regs(pid_t pid, void *x, user_regs_struct_t *regs, user_fpregs_struct_t *fpsimd)
 {
 	int i;
+	struct user_gcs gcs_live;
+	struct iovec gcs_iov = { .iov_base = &gcs_live, .iov_len = sizeof(gcs_live) };
 	CoreEntry *core = x;
 
 	// Save the Aarch64 CPU state
@@ -157,14 +159,24 @@ int save_task_regs(pid_t pid, void *x, user_regs_struct_t *regs, user_fpregs_str
 
 	// Save the FP/SIMD state
 	for (i = 0; i < 32; ++i) {
-		core->ti_aarch64->fpsimd->vregs[2 * i] = fpsimd->vregs[i];
-		core->ti_aarch64->fpsimd->vregs[2 * i + 1] = fpsimd->vregs[i] >> 64;
+		core->ti_aarch64->fpsimd->vregs[2 * i] = fpsimd->fpstate.vregs[i];
+		core->ti_aarch64->fpsimd->vregs[2 * i + 1] = fpsimd->fpstate.vregs[i] >> 64;
 	}
-	assign_reg(core->ti_aarch64->fpsimd, fpsimd, fpsr);
-	assign_reg(core->ti_aarch64->fpsimd, fpsimd, fpcr);
+	assign_reg(core->ti_aarch64->fpsimd, &fpsimd->fpstate, fpsr);
+	assign_reg(core->ti_aarch64->fpsimd, &fpsimd->fpstate, fpcr);
 
 	if (save_pac_keys(pid, core))
 		return -1;
+
+	// Save the GCS state
+	if (ptrace(PTRACE_GETREGSET, pid, (void *)0x410, &gcs_iov) < 0) {
+		pr_perror("Failed to get GCS for %d", pid);
+		return -1;
+	}
+
+	core->ti_aarch64->gcs->gcspr_el0       = gcs_live.gcspr_el0;
+	core->ti_aarch64->gcs->features_enabled = gcs_live.features_enabled;
+
 	return 0;
 }
 
@@ -173,6 +185,7 @@ int arch_alloc_thread_info(CoreEntry *core)
 	ThreadInfoAarch64 *ti_aarch64;
 	UserAarch64RegsEntry *gpregs;
 	UserAarch64FpsimdContextEntry *fpsimd;
+	UserAarch64GcsEntry *gcs;
 
 	ti_aarch64 = xmalloc(sizeof(*ti_aarch64));
 	if (!ti_aarch64)
@@ -202,6 +215,13 @@ int arch_alloc_thread_info(CoreEntry *core)
 	if (!fpsimd->vregs)
 		goto err;
 
+	/* 🎯 Allocate & init GCS */
+	gcs = xmalloc(sizeof(*gcs));
+	if (!gcs)
+		goto err;
+	user_aarch64_gcs_entry__init(gcs);
+	ti_aarch64->gcs = gcs;
+
 	return 0;
 err:
 	return -1;
@@ -227,10 +247,25 @@ void arch_free_thread_info(CoreEntry *core)
 	}
 }
 
-int restore_fpu(struct rt_sigframe *sigframe, CoreEntry *core)
+int restore_fpu(struct rt_sigframe *sigframe, CoreEntry *core, pid_t pid)
 {
 	int i;
 	struct fpsimd_context *fpsimd = RT_SIGFRAME_FPU(sigframe);
+	struct gcs_context *gcs = RT_SIGFRAME_GCS(sigframe);
+
+	// Live GCS
+	// struct user_gcs g;
+	// struct iovec gcs_iov = { .iov_base = &g, .iov_len = sizeof(g) };
+
+	pr_debug("[restore_fpu]: about to fetch GCS from pid=%d\n", pid);
+	// printf("🛑 Press ENTER to continue...\n");
+	// getchar();
+
+	// pr_debug("\t Got PID=%d\n", pid);
+	// if (ptrace(PTRACE_GETREGSET, pid, (void *)0x410, &gcs_iov) < 0) {
+	//     pr_perror("PTRACE_GETREGSET (NT_ARM_GCS) failed");
+	//     return -1;
+	// }
 
 	if (core->ti_aarch64->fpsimd->n_vregs != 64)
 		return 1;
@@ -243,6 +278,18 @@ int restore_fpu(struct rt_sigframe *sigframe, CoreEntry *core)
 
 	fpsimd->head.magic = FPSIMD_MAGIC;
 	fpsimd->head.size = sizeof(*fpsimd);
+
+	// ✨ populate GCS
+	gcs->head.magic         = GCS_MAGIC;
+	gcs->head.size          = sizeof(*gcs);
+	gcs->reserved           = 0;
+	// gcs->gcspr      		= g.gcspr_el0 - 8;
+	// gcs->features_enabled   = g.features_enabled;
+
+	gcs->gcspr = core->ti_aarch64->gcs->gcspr_el0 - 8;
+	gcs->features_enabled = core->ti_aarch64->gcs->features_enabled;
+
+	pr_debug("sigframe gcspr %llx enabled %llx\n", gcs->gcspr, gcs->features_enabled);
 
 	return 0;
 }

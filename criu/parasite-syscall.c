@@ -332,9 +332,10 @@ void parasite_ensure_args_size(unsigned long sz)
 		parasite_args_size = sz;
 }
 
-static int make_sigframe(void *arg, struct rt_sigframe *sf, struct rt_sigframe *rtsf, k_rtsigset_t *bs)
+static int make_sigframe(void *arg, struct rt_sigframe *sf, struct rt_sigframe *rtsf, k_rtsigset_t *bs, pid_t pid)
 {
-	return construct_sigframe(sf, rtsf, bs, (CoreEntry *)arg);
+	pr_debug("actually construct sysframe");
+	return construct_sigframe(sf, rtsf, bs, (CoreEntry *)arg, pid);
 }
 
 static int parasite_prepare_threads(struct parasite_ctl *ctl, struct pstree_item *item)

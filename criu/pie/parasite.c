@@ -857,6 +857,14 @@ static int parasite_dump_cgroup(struct parasite_dump_cgroup_args *args)
 void parasite_cleanup(void)
 {
 	if (mprotect_args) {
+		pr_debug("nr_vmas  = %u\n",   mprotect_args->nr_vmas);
+		pr_debug("add_prot = 0x%x\n", mprotect_args->add_prot);
+		pr_debug("off      = %u\n",   mprotect_args->off);
+		pr_debug("nr_segs  = %u\n",   mprotect_args->nr_segs);
+		pr_debug("nr_pages = %u\n",   mprotect_args->nr_pages);
+	}
+
+	if (mprotect_args) {
 		mprotect_args->add_prot = 0;
 		mprotect_vmas(mprotect_args);
 	}

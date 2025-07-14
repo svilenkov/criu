@@ -33,6 +33,6 @@ int parasite_daemon_cmd(int cmd, void *args)
 		break;
 	}
 
-	sys_write(1, &v, sizeof(int));
+	sys_write(1, &v, sizeof(int)); // print back to STDOUT
 	return 0;
 }

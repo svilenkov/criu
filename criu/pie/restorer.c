@@ -128,6 +128,7 @@ int parasite_trap_cmd(int cmd, void *args)
 
 void parasite_cleanup(void)
 {
+	pr_debug("%s:%d -> voided parasite_cleanup()", __FILE__, __LINE__);
 }
 
 extern void cr_restore_rt(void) asm("__cr_restore_rt") __attribute__((visibility("hidden")));
