@@ -174,8 +174,11 @@ int save_task_regs(pid_t pid, void *x, user_regs_struct_t *regs, user_fpregs_str
 		return -1;
 	}
 
-	core->ti_aarch64->gcs->gcspr_el0       = gcs_live.gcspr_el0;
+	core->ti_aarch64->gcs->gcspr_el0        = gcs_live.gcspr_el0;
 	core->ti_aarch64->gcs->features_enabled = gcs_live.features_enabled;
+
+	// assign_reg(core->ti_aarch64->gcs, &gcs_live, gcspr_el0);
+	// assign_reg(core->ti_aarch64->gcs, &gcs_live, features_enabled);
 
 	return 0;
 }

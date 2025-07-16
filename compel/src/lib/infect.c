@@ -1641,19 +1641,21 @@ void dump_mem_via_dd(pid_t pid, unsigned long pc) {
     pclose(fp);
 }
 
-static void dump_proc_maps(pid_t pid) {
+static void dump_proc_maps(pid_t pid, bool smaps) {
 	char path[64];
 	FILE *fp;
 	char line[512];
 
-	snprintf(path, sizeof(path), "/proc/%d/maps", pid);
+	const char *fname = smaps ? "smaps" : "maps";
+
+	snprintf(path, sizeof(path), "/proc/%d/%s", pid, fname);
 
 	fp = fopen(path, "r");
 	if (!fp) {
 		pr_err("Failed to open %s\n", path);
 		return;
 	}
-	pr_debug("===== /proc/%d/maps =====\n", pid);
+	pr_debug("===== /proc/%d/%s =====\n", pid, fname);
 
 	while (fgets(line, sizeof(line), fp)) {
 		// Remove potential trailing newline
@@ -1771,7 +1773,10 @@ static int parasite_fini_seized(struct parasite_ctl *ctl)
 	pr_info("➡️ Waiting for task to enter & exit syscall: %d\n", __NR_rt_sigreturn);
 
 	pr_debug("DUMPING /proc/%d/maps 💩 compel_stop_on_syscall\n", pid);
-	dump_proc_maps(pid);
+	dump_proc_maps(pid, false);
+
+	pr_debug("DUMPING /proc/%d/smaps 🔓 compel_stop_on_syscall\n", pid);
+	dump_proc_maps(pid, true);
 
 	pr_debug("Dumping mem for ctl->orig.regs.pc=%llx\n", ctl->orig.regs.pc);
 	dump_mem_via_dd(pid, ctl->orig.regs.pc);
@@ -2078,7 +2083,7 @@ int compel_stop_on_syscall(int tasks, const int sys_nr, const int sys_nr_compat)
 			pr_err("💥 Crash: PID=%d PC=0x%llx SP=0x%llx REGS[8]=0x%llx\n",
        			pid, regs.pc, regs.sp, regs.regs[8]);
 			pr_err("task_is_trapped() failed for pid=%d status=0x%x\n", pid, status);
-			dump_proc_maps(pid);
+			dump_proc_maps(pid, false);
 			dump_mem_via_dd(pid, regs.pc);
 			return -1;
 		}

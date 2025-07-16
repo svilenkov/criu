@@ -829,6 +829,15 @@ static int dump_task_core_all(struct parasite_ctl *ctl, struct pstree_item *item
 	if (ret)
 		goto err;
 
+	if (core->ti_aarch64 && core->ti_aarch64->gcs) {
+		pr_debug("📦 [dump-gcs] gcspr_el0: 0x%lx\n",
+			core->ti_aarch64->gcs->gcspr_el0);
+		pr_debug("📦 [dump-gcs] features_enabled: 0x%lx\n",
+			core->ti_aarch64->gcs->features_enabled);
+	} else {
+		pr_warn("⚠️ [dump-gcs] GCS structure is NULL\n");
+	}
+	pr_debug("📦 [dump-gcs]");
 	img = img_from_set(cr_imgset, CR_FD_CORE);
 	ret = pb_write_one(img, core, PB_CORE);
 
@@ -985,6 +994,15 @@ static int dump_task_thread(struct parasite_ctl *parasite_ctl, const struct pstr
 	img = open_image(CR_FD_CORE, O_DUMP, tid->ns[0].virt);
 	if (!img)
 		goto err;
+
+	if (core->ti_aarch64 && core->ti_aarch64->gcs) {
+		pr_debug("📦 [GCS DEBUG] gcspr_el0: 0x%lx\n",
+			core->ti_aarch64->gcs->gcspr_el0);
+		pr_debug("📦 [GCS DEBUG] features_enabled: 0x%lx\n",
+			core->ti_aarch64->gcs->features_enabled);
+	} else {
+		pr_warn("⚠️ [GCS DEBUG] GCS structure is NULL\n");
+	}
 
 	ret = pb_write_one(img, core, PB_CORE);
 
