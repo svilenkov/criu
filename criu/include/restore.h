@@ -33,6 +33,7 @@ static inline int arch_shstk_unlock(struct pstree_item *item,
 static inline int arch_shstk_trampoline(struct pstree_item *item, CoreEntry *core,
 				    int (*func)(void *arg), void *arg)
 {
+	pr_debug("Inside arch_shstk_trampoline (fallback) %s %s:%d\n", __func__, __FILE__, __LINE__);
 	return func(arg);
 }
 #define arch_shstk_trampoline arch_shstk_trampoline

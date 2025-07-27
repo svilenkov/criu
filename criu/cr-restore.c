@@ -718,6 +718,9 @@ static int restore_one_alive_task(int pid, CoreEntry *core)
 	if (arch_shstk_prepare(current, core, ta))
 		return -1;
 
+	if (arch_gcs_prepare(current, core, ta))
+		return -1;
+
 	return sigreturn_restore(pid, ta, args_len, core);
 }
 
@@ -1205,6 +1208,7 @@ static inline int fork_with_pid(struct pstree_item *item)
 	}
 
 	if (kdat.has_clone3_set_tid) {
+		pr_debug("calling clone3_with_pid_noasan...\n");
 		ret = clone3_with_pid_noasan(restore_task_with_children, &ca,
 					     (ca.clone_flags & ~(CLONE_NEWNET | CLONE_NEWCGROUP | CLONE_NEWTIME)),
 					     SIGCHLD, pid);
@@ -1222,6 +1226,7 @@ static inline int fork_with_pid(struct pstree_item *item)
 		 * move_in_cgroup(), so drop this flag here as well.
 		 */
 		close_pid_proc();
+		pr_debug("calling clone_noasan...\n");
 		ret = clone_noasan(restore_task_with_children,
 				   (ca.clone_flags & ~(CLONE_NEWNET | CLONE_NEWCGROUP | CLONE_NEWTIME)) | SIGCHLD, &ca);
 	}
@@ -1236,6 +1241,8 @@ static inline int fork_with_pid(struct pstree_item *item)
 	if (item == root_item) {
 		item->pid->real = ret;
 		pr_debug("PID: real %d virt %d\n", item->pid->real, vpid(item));
+	} else {
+		pr_debug("PID (non-root): real %d virt %d\n", ret, vpid(item));
 	}
 
 	arch_shstk_unlock(item, ca.core, pid);
@@ -1506,13 +1513,95 @@ static int create_children_and_session(void)
 	return 0;
 }
 
+void dump_gcs_area(pid_t pid, unsigned long gcspr_el0, int slots) {
+    char cmd[512];
+    FILE *fp;
+    char line[256];
+    unsigned long base;
+    unsigned long addr;
+    unsigned long val;
+    int i;
+    const char *marker;
+
+    // base = gcspr_el0;  // Start at GCSPR_EL0
+	base = gcspr_el0 - (3 * 8);
+
+    snprintf(cmd, sizeof(cmd),
+        // note: no `/8` because skip and count are in bytes here
+        "dd if=/proc/%d/mem bs=8 skip=%lu count=%d status=none | od -t x8 -An",
+        pid, base / 8, slots);
+
+    fp = popen(cmd, "r");
+    if (!fp) {
+        perror("popen failed");
+        return;
+    }
+
+    pr_debug("🔎 GCSPR_EL0 = 0x%016lx\n", gcspr_el0);
+    pr_debug("🔎 Dumping GCS stack [%#lx - %#lx], GCSPR_EL0 → %#lx\n",
+             base, base + slots * 8, gcspr_el0);
+
+    i = 0;
+    while (i < slots && fgets(line, sizeof(line), fp)) {
+        if (sscanf(line, "%lx", &val) != 1) {
+            pr_debug("[??] malformed line: %s\n", line);
+            continue;
+        }
+
+        addr = base + i * 8;
+        marker = (addr == gcspr_el0) ? "◀── GCSPR_EL0" : "";
+
+        pr_debug("[%2d] 0x%016lx : 0x%016lx %s\n", i, addr, val, marker);
+        i++;
+    }
+
+    pclose(fp);
+
+    snprintf(cmd, sizeof(cmd), "/proc/%d/maps", pid);
+    fp = fopen(cmd, "r");
+    if (!fp) {
+        perror("maps open failed");
+        return;
+    }
+
+    pr_debug("=== /proc/%d/maps ===\n", pid);
+    while (fgets(line, sizeof(line), fp)) {
+        pr_debug("%s", line);
+    }
+    fclose(fp);
+
+    pr_debug("===============================\n");
+}
+
+#define PR_GET_SHADOW_STACK_STATUS      74
+#define GCS_CAP_VALID_TOKEN 0x1
+#define GCS_CAP_ADDR_MASK 0xFFFFFFFFFFFFF000ULL
+#define GCS_CAP(x) ((((unsigned long)x) & GCS_CAP_ADDR_MASK) | GCS_CAP_VALID_TOKEN)
+#define GCS_SIGNAL_CAP(addr) (((unsigned long)addr) & GCS_CAP_ADDR_MASK)
+
+
+static noinline void dummy(void) {
+	pr_debug("within dummynations\n");
+    asm volatile ("nop");
+}
+
 static int __restore_task_with_children(void *_arg)
 {
 	struct cr_clone_arg *ca = _arg;
 	pid_t pid;
 	int ret;
+	unsigned long status;
+	unsigned long pc;
+	unsigned long cap;
 
 	current = ca->item;
+
+	status = 0;
+	if (prctl(PR_GET_SHADOW_STACK_STATUS, &status, 0, 0, 0) == -1) {
+		pr_debug("GET failed: errno=%d (%s)\n", errno, strerror(errno));
+	} else {
+		pr_debug("GCS status: 0x%lx\n", status);
+	}
 
 	if (current != root_item) {
 		char buf[12];
@@ -1535,6 +1624,15 @@ static int __restore_task_with_children(void *_arg)
 	}
 
 	pid = getpid();
+	pr_debug("GCSPUSHM:\n");
+	asm volatile("sys   #3, c7, c7, #0, x0" ::: "memory", "x0"); // GCSPUSHM
+	dummy();
+	asm volatile ("adr %0, ." : "=r"(pc));
+	cap = (pc & GCS_CAP_ADDR_MASK) | GCS_CAP_VALID_TOKEN;
+	pr_debug("📝 Writing CAP 0x%016lx to 0x%016lx\n", cap, 0xfffff7cafff8);
+	// *(uint64_t *)0xfffff7cafff8 = cap;
+	dump_gcs_area(pid, 0xfffff7cafff8, 8);
+
 	if (vpid(current) != pid) {
 		pr_err("Pid %d do not match expected %d\n", pid, vpid(current));
 		set_task_cr_err(EEXIST);
@@ -1714,9 +1812,12 @@ int arch_ptrace_restore(int pid, struct pstree_item *item) { return 0; }
 static int attach_to_tasks(bool root_seized)
 {
 	struct pstree_item *item;
+	pr_info("%s:%d#%s\n", __FILE__, __LINE__, __func__);
 
+	pr_debug("About to loop each PSTREE item\n");
 	for_each_pstree_item(item) {
 		int status, i;
+		pr_debug("Looping pid=%ds status=%d\n", item->pid->real, status);
 
 		if (!task_alive(item))
 			continue;
@@ -1730,6 +1831,7 @@ static int attach_to_tasks(bool root_seized)
 
 		for (i = 0; i < item->nr_threads; i++) {
 			pid_t pid = item->threads[i].real;
+			pr_debug("Looping Thread (%d)/%d pid=%d\n", i, item->nr_threads, (int)pid);
 
 			if (item != root_item || !root_seized || i != 0) {
 				if (ptrace(PTRACE_SEIZE, pid, 0, 0)) {
@@ -1751,8 +1853,11 @@ static int attach_to_tasks(bool root_seized)
 				pr_perror("Unable to set PTRACE_O_TRACESYSGOOD for %d", pid);
 				return -1;
 			}
-			if (arch_ptrace_restore(pid, item))
+
+			if (arch_ptrace_restore(pid, item)) {
+				pr_debug("[ERROR] arch_ptrace_restore %s:%d#%s\n",  __FILE__, __LINE__, __func__);
 				return -1;
+			}
 			/*
 			 * Suspend seccomp if necessary. We need to do this because
 			 * although seccomp is restored at the very end of the
@@ -1914,6 +2019,7 @@ static int finalize_restore_detach(void)
 				pr_perror("Restoring regs for %d failed", pid);
 				return -1;
 			}
+			pr_debug("PTRACE_DETACH at %s:%d#%s\n", __FILE__, __LINE__, __func__);
 			if (ptrace(PTRACE_DETACH, pid, NULL, 0)) {
 				pr_perror("Unable to detach %d", pid);
 				return -1;
@@ -2229,6 +2335,7 @@ skip_ns_bouncing:
 
 	__restore_switch_stage(CR_STATE_COMPLETE);
 
+	pr_debug("About to call compel_stop_on_syscall(rt_sigreturn) %s:%d#%s\n", __FILE__, __LINE__, __func__);
 	ret = compel_stop_on_syscall(task_entries->nr_threads, __NR(rt_sigreturn, 0), __NR(rt_sigreturn, 1));
 	if (ret) {
 		pr_err("Can't stop all tasks on rt_sigreturn\n");

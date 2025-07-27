@@ -4,6 +4,8 @@
 #include <execinfo.h>
 #include <stdlib.h>
 #include "debug.h"
+
+#include "log.h"
 // #include "uapi/compel/asm/infect-types.h"
 
 // void read_gcs(struct user_gcs *gcs) {
@@ -30,9 +32,9 @@ void print_callstack(void) {
     int nptrs = backtrace(buffer, 64);
     char **symbols = backtrace_symbols(buffer, nptrs);
 
-    printf("🔎 Call stack (%d frames):\n", nptrs);
+    pr_debug("🔎 Call stack (%d frames):\n", nptrs);
     for (int i = 0; i < nptrs; i++) {
-        printf("  [%d] %s\n", i, symbols[i]);
+        pr_debug("  [%d] %s\n", i, symbols[i]);
     }
     free(symbols);
 }
@@ -84,4 +86,140 @@ void print_stack_info(const char *tag) {
 
 void print_stack_info_fp(FILE *log, const char *tag) {
     _print_stack(log, tag);
+}
+
+bool get_ss_vma_range(pid_t pid, unsigned long *start, unsigned long *end)
+{
+	char path[64];
+	FILE *fp;
+	char line[512];
+	char block[8192] = "";
+	size_t block_len = 0;
+
+	snprintf(path, sizeof(path), "/proc/%d/smaps", pid);
+	fp = fopen(path, "r");
+	if (!fp) {
+		pr_err("Failed to open %s\n", path);
+		return false;
+	}
+
+	while (fgets(line, sizeof(line), fp)) {
+		line[strcspn(line, "\n")] = 0;
+
+		if (strchr(line, '-') && strchr(line, ':')) {
+			block[0] = 0;
+			block_len = 0;
+		}
+
+		if (block_len + strlen(line) + 2 < sizeof(block)) {
+			block_len += snprintf(block + block_len, sizeof(block) - block_len, "%s\n", line);
+		}
+
+		if (strncmp(line, "VmFlags:", 8) == 0 && strstr(line, " ss")) {
+			// First line in block is always the VMA range line
+			char *vma_line = strtok(block, "\n");
+			if (vma_line) {
+				if (sscanf(vma_line, "%lx-%lx", start, end) == 2) {
+					pr_debug("SS VMA range: %lx-%lx\n", *start, *end);
+					fclose(fp);
+					return true;
+				}
+			}
+		}
+	}
+
+	fclose(fp);
+	return false;
+}
+
+static void filter_and_print_ss_block(const char *block)
+{
+	const char *keys[] = {
+		"Size:", "KernelPageSize:", "MMUPageSize:",
+		"Rss:", "Pss:", "Private_Dirty:", "Referenced:",
+		"Anonymous:", "VmFlags:"
+	};
+	bool first_line;
+	const size_t num_keys = sizeof(keys) / sizeof(keys[0]);
+
+	char *line, *copy, *saveptr;
+
+	copy = strdup(block);
+	if (!copy)
+		return;
+
+	line = strtok_r(copy, "\n", &saveptr);
+
+	first_line = true;
+	while (line) {
+		if (first_line) {
+			pr_debug("  %s\n", line);  // Always print the first line (VMA range)
+			first_line = false;
+			continue;
+		}
+
+		for (size_t i = 0; i < num_keys; i++) {
+			if (strncmp(line, keys[i], strlen(keys[i])) == 0) {
+				pr_debug("  %s\n", line);
+				break;
+			}
+		}
+		line = strtok_r(NULL, "\n", &saveptr);
+	}
+
+	free(copy);
+}
+
+void dump_proc_maps(pid_t pid, bool smaps) {
+	char path[64];
+	FILE *fp;
+	char line[512];
+	char block[8192] = "";
+	size_t block_len = 0;
+
+	const char *fname = smaps ? "smaps" : "maps";
+
+	snprintf(path, sizeof(path), "/proc/%d/%s", pid, fname);
+
+	fp = fopen(path, "r");
+	if (!fp) {
+		pr_err("Failed to open %s\n", path);
+		return;
+	}
+	pr_debug("===== /proc/%d/%s =====\n", pid, fname);
+
+	while (fgets(line, sizeof(line), fp)) {
+		// Remove potential trailing newline
+		line[strcspn(line, "\n")] = 0;
+
+		if(smaps) {
+			if (strchr(line, '-')  && strchr(line, ':')) {
+				// new VMA text block
+				// so reset buffa
+				block[0] = 0;
+				block_len = 0;
+
+				// Always append range
+			    // block_len += snprintf(block + block_len, sizeof(block) - block_len, "%s\n", line);
+    			// continue;
+			}
+
+			if (block_len + strlen(line) + 2 < sizeof(block)) {
+				block_len += snprintf(block + block_len, sizeof(block) - block_len, "%s\n", line);
+			}
+
+			if(strncmp(line, "VmFlags:", 8) == 0) {
+				if (strstr(line, " ss"))
+                    filter_and_print_ss_block(block);
+					// pr_debug("SS: %s\n", block);
+			}
+
+			continue;
+		}
+
+		pr_debug("%s\n", line);
+	}
+
+	fclose(fp);
+	pr_debug("=========================\n");
 }

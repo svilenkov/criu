@@ -756,9 +756,14 @@ __visible long __export_restore_thread(struct thread_restore_args *args)
 		goto core_restore_end;
 	}
 
+	pr_debug("Time to arch_shstk_restore from %s %s:%d\n", __func__, __FILE__, __LINE__);
 	/* restore original shadow stack */
 	if (arch_shstk_restore(&args->shstk))
 		goto core_restore_end;
+
+	if (arch_gcs_restore(&args->gcs)) {
+		goto core_restore_end;
+	}
 
 	/* All signals must be handled by thread leader */
 	ksigfillset(&to_block);
@@ -797,7 +802,7 @@ __visible long __export_restore_thread(struct thread_restore_args *args)
 		goto core_restore_end;
 	}
 
-	pr_info("%ld: Restored\n", sys_gettid());
+	pr_info("%ld: Restored at %s:%d#%s\n", sys_gettid(), __FILE__, __LINE__, __func__);
 
 	restore_finish_stage(task_entries_local, CR_STATE_RESTORE);
 
@@ -1389,7 +1394,12 @@ static int unmap_old_vmas(void *premmapped_addr, unsigned long premmapped_len, v
 		p1 = bootstrap_start;
 		s1 = bootstrap_len;
 	}
-
+	// will unmap the shadow stack
+	// 2 options:
+	//   1) after unmapping all VMAs
+	//....      problem: ensure newly alloc shadow stack will be in the right place,
+	//                   so we ahve to relocatee it
+	//   2)
 	ret = sys_munmap(NULL, p1 - NULL);
 	if (ret) {
 		pr_err("Unable to unmap (%p-%p): %d\n", NULL, p1, ret);
@@ -1666,6 +1676,10 @@ static int restore_membarrier_registrations(int mask)
 	return ret;
 }
 
+static noinline void dummy() {
+	pr_debug("Howdy (DUMMIFICATION)\n");
+}
+
 /*
  * The main routine to restore task via sigreturn.
  * This one is very special, we never return there
@@ -1705,6 +1719,9 @@ __visible long __export_restore_task(struct task_restore_args *args)
 	__page_size = args->page_size;
 #endif
 
+	pr_info("Start of Switched to the restorer %d\n", my_pid);
+	pr_debug("wtf __export_restore_task at %s %s:%d\n", __func__, __FILE__, __LINE__);
+
 	ksigfillset(&act.rt_sa_mask);
 	act.rt_sa_handler = sigchld_handler;
 	act.rt_sa_flags = SA_SIGINFO | SA_RESTORER | SA_RESTART;
@@ -1727,14 +1744,20 @@ __visible long __export_restore_task(struct task_restore_args *args)
 	std_log_set_loglevel(args->loglevel);
 	std_log_set_start(&args->logstart);
 
-	pr_info("Switched to the restorer %d\n", my_pid);
+	pr_info("Switched to the restorer (ok) %d\n", my_pid);
+
 
 	if (args->uffd > -1) {
 		pr_debug("lazy-pages: uffd %d\n", args->uffd);
 	}
 
-	if (arch_shstk_switch_to_restorer(&args->shstk))
+	if (arch_shstk_switch_to_restorer(&args->shstk)) {
 		goto core_restore_end;
+	}
+
+	if (arch_gcs_switch_to_restorer(&args->gcs)) {
+		goto core_restore_end;
+	}
 
 	/*
 	 * Park vdso/vvar in a safe place if architecture doesn't support
@@ -1743,14 +1766,20 @@ __visible long __export_restore_task(struct task_restore_args *args)
 	 * it's presence in original task: vdso will be used for fast
 	 * gettimeofday() in restorer's log timings.
 	 */
+
+	 //  restore addr space - unmap criu mappings, unmap shadowstack
 	if (!args->can_map_vdso && vdso_is_present(&args->vdso_maps_rt)) {
 		/* It's already checked in kdat, but let's check again */
 		if (args->compatible_mode) {
 			pr_err("Compatible mode without vdso map support\n");
 			goto core_restore_end;
 		}
-		if (!can_restore_vdso(args))
+		if (!can_restore_vdso(args)) {
+			pr_debug("can_restore_vdso: FAIL\n");
 			goto core_restore_end;
+		}
+
+			pr_debug("About to call vdso_do_park\n");
 		if (vdso_do_park(&args->vdso_maps_rt, args->vdso_rt_parked_at, vdso_rt_size))
 			goto core_restore_end;
 	}
@@ -1762,18 +1791,24 @@ __visible long __export_restore_task(struct task_restore_args *args)
 	 * for instance once the kernel will want to update (struct rseq).cpu_id field:
 	 * https://github.com/torvalds/linux/blob/ce522ba9ef7e/kernel/rseq.c#L89
 	 */
+	pr_debug("About to unregister GLIBC (+rseq)\n");
 	unregister_libc_rseq(&args->libc_rseq);
 
+	pr_debug("About to unmap_old_vmas\n");
+	dummy();
 	if (unmap_old_vmas((void *)args->premmapped_addr, args->premmapped_len, bootstrap_start, bootstrap_len,
 			   args->task_size))
 		goto core_restore_end;
 
 	/* Map vdso that wasn't parked */
+	pr_debug("Mapping VDSO that wasn't parked");
 	if (args->can_map_vdso && (map_vdso(args, args->compatible_mode) < 0))
 		goto core_restore_end;
 
 	vdso_update_gtod_addr(&args->vdso_maps_rt);
 
+	pr_debug("Shifting private VMAs to the left <<<");
+	// at this point we unmapped all
 	/* Shift private vma-s to the left */
 	for (i = 0; i < args->vmas_n; i++) {
 		vma_entry = args->vmas + i;
@@ -1798,6 +1833,7 @@ __visible long __export_restore_task(struct task_restore_args *args)
 			goto core_restore_end;
 	}
 
+	pr_debug("Shifting private VMAs to the right >>>");
 	/* Shift private vma-s to the right */
 	for (i = args->vmas_n - 1; i >= 0; i--) {
 		vma_entry = args->vmas + i;
@@ -2177,7 +2213,7 @@ __visible long __export_restore_task(struct task_restore_args *args)
 	if (restore_membarrier_registrations(args->membarrier_registration_mask) < 0)
 		goto core_restore_end;
 
-	pr_info("%ld: Restored\n", sys_getpid());
+	pr_info("%ld: Restored at %s:%d#%s\n", sys_gettid(), __FILE__, __LINE__, __func__);
 
 	restore_finish_stage(task_entries_local, CR_STATE_RESTORE);
 
@@ -2244,6 +2280,7 @@ __visible long __export_restore_task(struct task_restore_args *args)
 
 	futex_set_and_wake(&thread_inprogress, args->nr_threads);
 
+	pr_debug("Time to arch_shstk_restore from %s %s:%d\n", __func__, __FILE__, __LINE__);
 	/*
 	 * Shadow stack of the leader can be locked only after all other
 	 * threads were cloned, otherwise they may start with read-only
@@ -2251,6 +2288,10 @@ __visible long __export_restore_task(struct task_restore_args *args)
 	 */
 	if (arch_shstk_restore(&args->shstk))
 		goto core_restore_end;
+
+	if (arch_gcs_restore(&args->gcs)) {
+		goto core_restore_end;
+	}
 
 	restore_finish_stage(task_entries_local, CR_STATE_RESTORE_CREDS);
 

@@ -434,6 +434,7 @@ int compel_resume_task_sig(pid_t pid, int orig_st, int st, int stop_signo)
 		ret = -1;
 	}
 
+	pr_debug("PTRACE_DETACH at %s:%d#%s\n", __FILE__, __LINE__, __func__);
 	if (ptrace(PTRACE_DETACH, pid, NULL, NULL)) {
 		pr_perror("Unable to detach from %d", pid);
 		return -1;
@@ -951,6 +952,7 @@ static int parasite_start_daemon(struct parasite_ctl *ctl)
 		pr_perror("PTRACE_GETREGSET failed");
 		return -1;
 	}
+	pr_debug("\t__dump_gcs_slots at %s:%d#%s\n", __FILE__, __LINE__, __func__);pr_debug("PTRACE_DETACH at %s:%d#%s\n", __FILE__, __LINE__, __func__);
 	dump_gcs_slots(pid, gcs.gcspr_el0, 0, 0);
 	dump_stack(pid, (uint64_t) ctl->orig.regs.sp -16, 12);
 
@@ -1641,35 +1643,6 @@ void dump_mem_via_dd(pid_t pid, unsigned long pc) {
     pclose(fp);
 }
 
-static void dump_proc_maps(pid_t pid, bool smaps) {
-	char path[64];
-	FILE *fp;
-	char line[512];
-
-	const char *fname = smaps ? "smaps" : "maps";
-
-	snprintf(path, sizeof(path), "/proc/%d/%s", pid, fname);
-
-	fp = fopen(path, "r");
-	if (!fp) {
-		pr_err("Failed to open %s\n", path);
-		return;
-	}
-	pr_debug("===== /proc/%d/%s =====\n", pid, fname);
-
-	while (fgets(line, sizeof(line), fp)) {
-		// Remove potential trailing newline
-		line[strcspn(line, "\n")] = 0;
-		pr_debug("%s\n", line);
-	}
-
-	// dd if=/proc/<pid>/mem bs=1 skip=<PC> count=16 | hexdump -C
-
-	fclose(fp);
-	pr_debug("=========================\n");
-}
-
-
 static int parasite_fini_seized(struct parasite_ctl *ctl)
 {
 	pid_t pid = ctl->rpid;
@@ -1748,6 +1721,7 @@ static int parasite_fini_seized(struct parasite_ctl *ctl)
 
 	expected_cap = 0xfffff7def000;
 
+	pr_debug("\t__dump_gcs_slots at %s:%d#%s\n", __FILE__, __LINE__, __func__);pr_debug("PTRACE_DETACH at %s:%d#%s\n", __FILE__, __LINE__, __func__);
 	dump_gcs_slots(ctl->rpid, g.gcspr_el0, 0, expected_cap);
 
 	// ptrace(PTRACE_POKEDATA, pid, (void*)g.gcspr_el0, 0xfffff7def000);
@@ -1788,6 +1762,7 @@ static int parasite_fini_seized(struct parasite_ctl *ctl)
 		pr_err("❌ compel_stop_on_syscall() failed while waiting for rt_sigreturn\n");
 		return -1;
 	}
+	pr_debug("\t__dump_gcs_slots at %s:%d#%s\n", __FILE__, __LINE__, __func__);pr_debug("PTRACE_DETACH at %s:%d#%s\n", __FILE__, __LINE__, __func__);
 	dump_gcs_slots(pid, g.gcspr_el0, 0, expected_cap);
 	// dump_stack(pid, (uint64_t) ctl->orig.regs.sp, 8);
 	// dump_stack(pid, (uint64_t) ctl->orig.regs.regs[2], 8);
@@ -2033,6 +2008,7 @@ static bool task_is_trapped(int status, pid_t pid)
 static inline int is_required_syscall(user_regs_struct_t *regs, pid_t pid, const int sys_nr, const int sys_nr_compat)
 {
 	struct user_gcs gcs;
+	unsigned long ss_vma_start, ss_vma_end;
 	struct iovec gcs_iov = { .iov_base = &gcs, .iov_len = sizeof(gcs) };
 	const char *mode = user_regs_native(regs) ? "native" : "compat";
 	int req_sysnr = user_regs_native(regs) ? sys_nr : sys_nr_compat;
@@ -2045,6 +2021,14 @@ static inline int is_required_syscall(user_regs_struct_t *regs, pid_t pid, const
         return -1;
     }
 
+	pr_info("GCSPR: 0x%llx %s:%d#%s\n", gcs.gcspr_el0, __FILE__, __LINE__, __func__);
+	pr_debug("\t__dump_gcs_slots at %s:%d#%s\n", __FILE__, __LINE__, __func__);
+	dump_proc_maps(pid, true);
+	if (get_ss_vma_range(pid, &ss_vma_start, &ss_vma_end)) {
+		pr_debug("Found shadow stack VMA at %lx - %lx\n", ss_vma_start, ss_vma_end);
+	} else {
+		pr_warn("No SS VMA found.\n");
+}
 	dump_gcs_slots(pid, gcs.gcspr_el0, 0, 0xfffff7def000);
 
 	return (REG_SYSCALL_NR(*regs) == req_sysnr);
@@ -2079,6 +2063,7 @@ int compel_stop_on_syscall(int tasks, const int sys_nr, const int sys_nr_compat)
 			pr_debug("\t 😦 oh noo IT'S A TRAP!\n");
 			ptrace(PTRACE_GETREGSET, pid, 0x410 , &gcs_iov);
 			dump_stack(pid, regs.sp, 8);
+			pr_debug("\t__dump_gcs_slots at %s:%d#%s\n", __FILE__, __LINE__, __func__);pr_debug("PTRACE_DETACH at %s:%d#%s\n", __FILE__, __LINE__, __func__);
 			dump_gcs_slots(pid, gcs.gcspr_el0, 0, 0xfffff7def000);
 			pr_err("💥 Crash: PID=%d PC=0x%llx SP=0x%llx REGS[8]=0x%llx\n",
        			pid, regs.pc, regs.sp, regs.regs[8]);

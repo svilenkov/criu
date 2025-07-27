@@ -1,0 +1,60 @@
+	// return 0;
+	// uint64_t *gcs_top;
+	// uint64_t expected_cap;
+	// uint64_t gcspr;
+
+	// gcs->vma_start: base of GCS
+	// gcs->vma_size:  size of GCS
+	// top of stack: base + size - 8
+	// gcs_top = (uint64_t *)(gcs->vma_start + gcs->vma_size - 8);
+
+	// expected_cap = ((gcs->vma_start + gcs->vma_size - 16) & GCS_CAP_ADDR_MASK) |
+	              //  GCS_CAP_VALID_TOKEN;
+
+
+	// asm volatile("mrs %0, tpidr2_el0" : "=r"(gcspr));
+
+	// gcs_top = (uint64_t *)gcspr;
+	// expected_cap =
+	// 		(((uint64_t)gcs_top - 8) & GCS_CAP_ADDR_MASK) | GCS_CAP_VALID_TOKEN;
+
+	// pr_info("GCS: calculated cap token 0x%lx at top %p\n",
+  	//       (unsigned long)expected_cap, gcs_top);
+	// *gcs_top = expected_cap;
+
+	// asm volatile (
+	// 		"sys    #3, c7, c7, #0, x0\n"  // GCSPUSHM
+	// 		:
+	// 		:
+	// 		: "memory", "x0"
+	// );
+
+	// asm volatile("sysl  x0, #3, c7, c7, #1" ::: "memory", "x0"); //  GCSPOPM
+	// asm volatile("sys   #3, c7, c7, #0, x0" ::: "memory", "x0"); // GCSPUSHM
+
+	// long ret;
+	// unsigned long *gcs_data = (unsigned long *) gcs->premapped_addr;
+
+	// unsigned long *pivot;
+
+	// if (gcs_map(gcs->vma_start, gcs->vma_size)) {
+	// 	return -1;
+	// }
+
+	// x86 does a switch from temporary locaation to actual task's SS VMA
+	// we skip that part for now
+
+	/* Actual restoration of the shadow stack contents */
+	// for (; gcspr >= gcs->gcspr_el0; gcspr -= 8, gcs_top--) {
+	// 	pr_debug("write:       gcspr=0x%lx\n", gcspr);
+	// 	pr_debug("       gcspr_el0=0x%lx\n", gcs->gcspr_el0);
+	// 	pr_debug("       gcs_top=0x%lx\n", gcs_top);
+	// 	pr_debug("       val=0x%lx\n", gcs_data[gcs_top]);
+	// 	pr_debug("*(unsigned long *)gcspr = gcs_data[0x%lx]\n", gcs_top);
+	// 	// *(unsigned long *)gcspr = gcs_data[gcs_top];
+	// }
+
+	// pivot = (unsigned long *)(gcs->gcspr_el0);
+	// pr_debug("  pivot before ALIGN_DOWN: 0x%lx", (unsigned long)pivot);
+	//*pivot = ALIGN_DOWN(GCS_CAP((unsigned long)pivot), 8);
+	// pr_debug("  pivot after set:  *pivot=0x%ln", pivot);

@@ -240,6 +240,7 @@ static always_inline int shstk_switch_to_restorer(struct rst_shstk_info *cet)
 	if (!(cet->cet & ARCH_SHSTK_SHSTK))
 		return 0;
 
+	// cet->tmp_shstk is (premmaped_addr + size)
 	ret = sys_munmap((void *)cet->tmp_shstk, PAGE_SIZE);
 	if (ret < 0) {
 		pr_err("Failed to unmap area for temporary shadow stack\n");

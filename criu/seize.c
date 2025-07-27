@@ -420,6 +420,7 @@ static int freezer_detach(void)
 		pid_t pid = processes_to_wait_pids[i];
 		int status, save_errno;
 
+		pr_debug("PTRACE_DETACH at %s:%d#%s\n", __FILE__, __LINE__, __func__);
 		if (ptrace(PTRACE_DETACH, pid, NULL, NULL) == 0)
 			continue;
 
@@ -782,6 +783,7 @@ static void unseize_task_and_threads(const struct pstree_item *item, int st)
 	if (st == TASK_DEAD)
 		return;
 
+	pr_debug("PTRACE_DETACH at %s:%d#%s\n", __FILE__, __LINE__, __func__);
 	for (i = 1; i < item->nr_threads; i++)
 		if (ptrace(PTRACE_DETACH, item->threads[i].real, NULL, NULL))
 			pr_perror("Unable to detach from %d", item->threads[i].real);

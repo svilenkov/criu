@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include <stdlib.h>
 #include <sys/ptrace.h>
 #include <sys/types.h>
@@ -5,6 +6,8 @@
 #include <asm/ptrace.h>
 #include <linux/elf.h>
 #include <linux/types.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 #include <compel/plugins/std/syscall-codes.h>
 #include "common/page.h"
@@ -12,9 +15,11 @@
 #include "log.h"
 #include "errno.h"
 #include "infect.h"
+#include "debug.h"
 #include "infect-priv.h"
 #include "asm/breakpoints.h"
 #include <linux/sched.h>
+#include "compel/ptrace.h"
 
 #define PR_SHADOW_STACK_ENABLE      (1UL << 0)
 #define PR_SHADOW_STACK_WRITE		(1UL << 1)
@@ -435,42 +440,112 @@ int inject_gcs_cap_token(struct parasite_ctl *ctl, pid_t pid, struct user_gcs *g
 
 // static size_t page_size = 65536;
 
+void print_proc_status_lines(pid_t pid, const char *keys[], size_t num_keys)
+{
+	char path[64];
+	char buf[4096];
+	FILE *fp;
+
+	snprintf(path, sizeof(path), "/proc/%d/status", pid);
+	fp = fopen(path, "r");
+	if (!fp) {
+		pr_perror("Failed to open %s", path);
+		return;
+	}
+
+	pr_info("/proc/%d/status filtered:\n", pid);
+	while (fgets(buf, sizeof(buf), fp)) {
+		for (size_t i = 0; i < num_keys; i++) {
+			if (strncmp(buf, keys[i], strlen(keys[i])) == 0) {
+				// Trim trailing newline
+				buf[strcspn(buf, "\n")] = 0;
+				pr_info("  %s\n", buf);
+				break;
+			}
+		}
+	}
+
+	fclose(fp);
+}
+
 void __dump_gcs_slots(id_t pid, uint64_t gcspr_el0, int offset, uint64_t expected_token) {
 	uint64_t start;
 	struct iovec local;
 	struct iovec remote;
 	ssize_t n;
+	const char *status_keys[] = { "Name:", "State:", "Pid:", "TracerPid:", "VmRSS:", "RssAnon:" };
+	unsigned long ss_start = 0, ss_end = 0;
 
 	enum { SLOTS = 8 };
     uint64_t buf[SLOTS];
 
+	uint64_t max_len;
+
 	// uint64_t expected_token = 0xDEADBEEFDEADBEEF;
+
+	if (!get_ss_vma_range(pid, &ss_start, &ss_end)) {
+		pr_warn("Unable to find SS VMA — bounds check disabled.\n");
+	}
+
 	if (offset == 0)
     	offset = 2;
 
-	start = gcspr_el0 - (offset * 8); // start here
+	start = gcspr_el0 - (offset * 8);
+	// start = ALIGN_DOWN(gcspr_el0 - (offset * 8), 8);
 
 	local.iov_base  = buf;
-	local.iov_len   = sizeof(buf);
-
+	local.iov_len = sizeof(buf);
 	remote.iov_base = (void *)start;
-	remote.iov_len  = sizeof(buf);
+	remote.iov_len = sizeof(buf);
+
+	// Clamp to SS VMA bounds if available
+	if (ss_start && ss_end) {
+		// Clamp read length to not exceed SS VMA
+		max_len = ss_end > start ? ss_end - start : 0;
+
+		if (max_len < sizeof(buf)) {
+			pr_debug("ℹ️ GCS dump clamped: requested %lu bytes, only %lu within SS VMA\n",
+				sizeof(buf), max_len);
+			local.iov_len = max_len;
+			remote.iov_len = max_len;
+		}
+	}
+
+	print_proc_status_lines(pid, status_keys, ARRAY_SIZE(status_keys));
+
+	local.iov_base  = buf;
+	local.iov_len   = 8;
+	remote.iov_base = (void *)gcspr_el0;
+	remote.iov_len  = 8;
 
     n = process_vm_readv(pid, &local, 1, &remote, 1, 0);
 
+    if (n != sizeof(buf)) {
+		pr_debug("process_vm_readv GCS dump failed: remote={addr=%p, len=%lu} local={addr=%p, len=%lu}\n",
+          remote.iov_base, remote.iov_len,
+          local.iov_base, local.iov_len);
+
+		pr_debug("Trying via PTRACE_PEEKDATA...\n");
+		// if (ptrace_peek_area(pid, remote.iov_base, local.iov_base, sizeof(buf)) < 0) {
+		if (ptrace_peek_area(pid, local.iov_base, remote.iov_base, sizeof(buf)) < 0) {
+			pr_debug("ptrace_peek_area also failed\n");
+			return;
+		}
+		pr_debug("ptrace_peek_arrea: success ✅\n");
+
+		n = sizeof(buf);
+    }
+
 	if (expected_token == 0)
         expected_token = 0xfffff7def000;
-
-    if (n != sizeof(buf)) {
-        pr_perror("process_vm_readv GCS dump");
-        return;
-    }
 
     pr_debug("🔎 GCS [gcspr_el0-%d .. gcspr_el0+16]:\n", offset * 8);
     for (int i = 0; i < SLOTS; ++i) {
         uint64_t addr = start + i * 8;
         const char *marker = "";
 
+		if (ss_start && ss_end && (addr < ss_start || addr >= ss_end))
+			marker = "❌ out-of-bounds";
 		if (buf[i] == expected_token && addr == gcspr_el0)
         	marker = "✅ CAP TOKEN & ◀─── [GCSPR_EL0]";
 	    else if (buf[i] == expected_token)
@@ -479,8 +554,6 @@ void __dump_gcs_slots(id_t pid, uint64_t gcspr_el0, int offset, uint64_t expecte
 			marker = "◀─── [GCSPR_EL0]";
 		else if (buf[i] == 0)
 			marker = "(zero)";
-
-
 
         pr_debug("  [%2d] 0x%016llx : 0x%016llx %s\n",
             i, (unsigned long long)addr,
@@ -515,6 +588,7 @@ int parasite_setup_gcs(struct parasite_ctl *ctl)
             return -1;
         }
 		pr_debug("[GCS DUMP]: After Injection:\n");
+		pr_debug("\t__dump_gcs_slots at %s:%d#%s\n", __FILE__, __LINE__, __func__);pr_debug("PTRACE_DETACH at %s:%d#%s\n", __FILE__, __LINE__, __func__);
 		__dump_gcs_slots(pid, gcs.gcspr_el0, 4, 0);
     } else {
         pr_perror("GCS not enabled for %d\n", pid);

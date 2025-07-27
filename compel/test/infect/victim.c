@@ -9,7 +9,7 @@ int main(int argc, char **argv)
     int i;
     FILE *log = fopen("victim.log", "w");
     if (!log) {
-        perror("fospen victim.log");
+        perror("fopen victim.log");
         return 1;
     }
 
