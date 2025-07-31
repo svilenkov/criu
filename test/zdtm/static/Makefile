@@ -537,6 +537,15 @@ shm-hugetlb.pid: shm-hugetlb
 env00.pid:	env00
 	GLIBC_TUNABLES=glibc.cpu.aarch64_gcs=1:glibc.cpu.aarch64_gcs_policy=2 \
 	$(<D)/$(<F) --pidfile=$@ --outfile=$<.out --envname=ENV_00_TEST
+
+session03.pid: session03
+	GLIBC_TUNABLES=glibc.cpu.aarch64_gcs=1:glibc.cpu.aarch64_gcs_policy=2 \
+	$(<D)/$(<F) --pidfile=$@ --outfile=$<.out
+
+posix_timers.pid: posix_timers
+	GLIBC_TUNABLES=glibc.cpu.aarch64_gcs=1:glibc.cpu.aarch64_gcs_policy=2 \
+	$(<D)/$(<F) --pidfile=$@ --outfile=$<.out
+
 umask00.pid:	umask00
 	$(<D)/$(<F) --pidfile=$@ --outfile=$<.out --mask=0345
 
@@ -729,6 +738,12 @@ cwd00: LDFLAGS += -z experimental-gcs=check
 
 env00: CFLAGS += -mbranch-protection=standard
 env00: LDFLAGS += -z experimental-gcs=check
+
+session03: CFLAGS += -mbranch-protection=standard
+session03: LDFLAGS += -z experimental-gcs=check
+
+posix_timers: CFLAGS += -mbranch-protection=standard
+posix_timers: LDFLAGS += -z experimental-gcs=check
 
 cgroupv2_01:		LDLIBS += -pthread
 
