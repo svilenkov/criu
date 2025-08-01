@@ -13,9 +13,35 @@
 #include "infect.h"
 #include "infect-priv.h"
 #include "asm/breakpoints.h"
+#include <linux/prctl.h>
 
 unsigned __page_size = 0;
 unsigned __page_shift = 0;
+
+#ifndef NT_ARM_GCS
+#define NT_ARM_GCS 0x410 /* ARM GCS state */
+#endif
+
+/* When set PR_SHADOW_STACK_ENABLE flag allocates a Guarded Control Stack */
+#ifndef PR_SHADOW_STACK_ENABLE
+#define PR_SHADOW_STACK_ENABLE      (1UL << 0)
+#endif
+
+/* Allows explicit GCS stores (eg. using GCSSTR) */
+#ifndef PR_SHADOW_STACK_WRITE
+#define PR_SHADOW_STACK_WRITE       (1UL << 1)
+#endif
+
+/* Allows explicit GCS pushes (eg. using GCSPUSHM) */
+#ifndef PR_SHADOW_STACK_PUSH
+#define PR_SHADOW_STACK_PUSH        (1UL << 2)
+#endif
+
+/* copied from: arch/arm64/include/asm/sysreg.h */
+#define GCS_CAP_VALID_TOKEN 0x1
+#define GCS_CAP_ADDR_MASK 0xFFFFFFFFFFFFF000ULL
+#define GCS_CAP(x) ((((unsigned long)x) & GCS_CAP_ADDR_MASK) | GCS_CAP_VALID_TOKEN)
+#define GCS_SIGNAL_CAP(addr) (((unsigned long)addr) & GCS_CAP_ADDR_MASK)
 
 /*
  * Injected syscall instruction
@@ -36,20 +62,36 @@ static inline void __always_unused __check_code_syscall(void)
 int sigreturn_prep_regs_plain(struct rt_sigframe *sigframe, user_regs_struct_t *regs, user_fpregs_struct_t *fpregs)
 {
 	struct fpsimd_context *fpsimd = RT_SIGFRAME_FPU(sigframe);
+	struct gcs_context *gcs = RT_SIGFRAME_GCS(sigframe);
 
 	memcpy(sigframe->uc.uc_mcontext.regs, regs->regs, sizeof(regs->regs));
+
+	pr_debug("sigreturn_prep_regs_plain: sp %lx pc %lx\n", (long)regs->sp, (long)regs->pc);
 
 	sigframe->uc.uc_mcontext.sp = regs->sp;
 	sigframe->uc.uc_mcontext.pc = regs->pc;
 	sigframe->uc.uc_mcontext.pstate = regs->pstate;
 
-	memcpy(fpsimd->vregs, fpregs->vregs, 32 * sizeof(__uint128_t));
+	memcpy(fpsimd->vregs, fpregs->fpstate.vregs, 32 * sizeof(__uint128_t));
 
-	fpsimd->fpsr = fpregs->fpsr;
-	fpsimd->fpcr = fpregs->fpcr;
+	fpsimd->fpsr = fpregs->fpstate.fpsr;
+	fpsimd->fpcr = fpregs->fpstate.fpcr;
 
 	fpsimd->head.magic = FPSIMD_MAGIC;
 	fpsimd->head.size = sizeof(*fpsimd);
+
+	if (__compel_gcs_enabled(&fpregs->gcs)) {
+		gcs->head.magic = GCS_MAGIC;
+		gcs->head.size = sizeof(*gcs);
+		gcs->reserved = 0;
+		gcs->gcspr = fpregs->gcs.gcspr_el0 - 8;
+		gcs->features_enabled = fpregs->gcs.features_enabled;
+
+		pr_debug("sigframe gcspr=%llx features_enabled=%llx\n", fpregs->gcs.gcspr_el0 - 8, fpregs->gcs.features_enabled);
+	} else {
+		pr_debug("sigframe gcspr=[disabled]");
+		memset(gcs, 0, sizeof(*gcs));
+	}
 
 	return 0;
 }
@@ -74,12 +116,14 @@ int compel_get_task_regs(pid_t pid, user_regs_struct_t *regs, user_fpregs_struct
 		goto err;
 	}
 
-	iov.iov_base = fpsimd;
-	iov.iov_len = sizeof(*fpsimd);
+	iov.iov_base = &fpsimd->fpstate;
+	iov.iov_len = sizeof(fpsimd->fpstate);
 	if ((ret = ptrace(PTRACE_GETREGSET, pid, NT_PRFPREG, &iov))) {
 		pr_perror("Failed to obtain FPU registers for %d", pid);
 		goto err;
 	}
+
+	memset(&fpsimd->gcs, 0, sizeof(fpsimd->gcs));
 
 	ret = save(pid, arg, regs, fpsimd);
 err:
@@ -285,4 +329,12 @@ int ptrace_flush_breakpoints(pid_t pid)
 		return -1;
 
 	return 0;
+}
+
+bool __compel_gcs_enabled(struct user_gcs *gcs)
+{
+	if (gcs->features_enabled & PR_SHADOW_STACK_ENABLE)
+		return true;
+
+	return false;
 }
