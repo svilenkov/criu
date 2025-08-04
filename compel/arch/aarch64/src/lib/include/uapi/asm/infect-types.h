@@ -56,4 +56,7 @@ struct user_gcs {
 extern bool __compel_gcs_enabled(struct user_gcs *gcs);
 #define compel_gcs_enabled __compel_gcs_enabled
 
+extern int __parasite_setup_gcs(struct parasite_ctl *ctl);
+#define parasite_setup_gcs __parasite_setup_gcs
+
 #endif /* UAPI_COMPEL_ASM_TYPES_H__ */

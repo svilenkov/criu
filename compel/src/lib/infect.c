@@ -761,6 +761,9 @@ static int parasite_start_daemon(struct parasite_ctl *ctl)
 	if (parasite_setup_shstk(ctl, &ext_regs))
 		return -1;
 
+	if (parasite_setup_gcs(ctl))
+		return -1;
+
 	if (parasite_init_daemon(ctl))
 		return -1;
 
