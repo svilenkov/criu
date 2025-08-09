@@ -563,14 +563,14 @@ static int restore_thread_ctx(int pid, struct thread_ctx *ctx, bool restore_ext_
 	if (restore_ext_regs && compel_set_task_ext_regs(pid, &ctx->ext_regs))
 		ret = -1;
 
+	ptrace(PTRACE_GETREGSET, pid, 0x410 , &gcs_iov);
+	ctx->ext_regs.gcs = gcs;
+	compel_set_task_gcs_regs(pid, &ctx->ext_regs);
+
 	if (ptrace(PTRACE_SETSIGMASK, pid, sizeof(k_rtsigset_t), &ctx->sigmask)) {
 		pr_perror("Can't block signals");
 		ret = -1;
 	}
-
-	ptrace(PTRACE_GETREGSET, pid, 0x410 , &gcs_iov);
-	ctx->ext_regs.gcs = gcs;
-	compel_set_task_gcs_regs(pid, &ctx->ext_regs);
 
 	return ret;
 }

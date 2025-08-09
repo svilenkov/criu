@@ -128,7 +128,7 @@ int compel_get_task_regs(pid_t pid, user_regs_struct_t *regs, user_fpregs_struct
 		goto err;
 	}
 
-	memset(&fpsimd->gcs, 0, sizeof(fpsimd->gcs));
+	// memset(&fpsimd->gcs, 0, sizeof(fpsimd->gcs));
 
 	if (ptrace(PTRACE_GETREGSET, pid, NT_ARM_GCS, &gcs_iov) == 0) {
 		pr_info("gcs: GCSPR_EL0 for %d: 0x%llx, features: 0x%llx\n",
