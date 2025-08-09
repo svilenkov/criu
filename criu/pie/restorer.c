@@ -1735,6 +1735,9 @@ __visible long __export_restore_task(struct task_restore_args *args)
 	if (arch_shstk_switch_to_restorer(&args->shstk))
 		goto core_restore_end;
 
+	if (arch_gcs_switch_to_restorer(&args->gcs))
+		goto core_restore_end;
+
 	/*
 	 * Park vdso/vvar in a safe place if architecture doesn't support
 	 * mapping them with arch_prctl().

@@ -60,6 +60,11 @@ struct restore_posix_timer {
 struct rst_shstk_info {};
 #endif
 
+#ifndef rst_gcs_info
+struct rst_gcs_info {};
+#endif
+
+
 /*
  * We should be able to construct fpu sigframe in sigreturn_prep_fpu_frame,
  * so the mem_zone.rt_sigframe should be 64-bytes aligned. To make things
@@ -125,6 +130,7 @@ struct thread_restore_args {
 	bool seccomp_force_tsync;
 
 	struct rst_shstk_info shstk;
+	struct rst_gcs_info   gcs;
 
 	char comm[TASK_COMM_LEN];
 	int cg_set;
@@ -250,6 +256,7 @@ struct task_restore_args {
 	u32 cap_eff[CR_CAP_SIZE];
 
 	struct rst_shstk_info shstk;
+	struct rst_gcs_info   gcs;
 } __aligned(64);
 
 /*
