@@ -759,6 +759,9 @@ __visible long __export_restore_thread(struct thread_restore_args *args)
 	if (arch_shstk_restore(&args->shstk))
 		goto core_restore_end;
 
+	if (arch_gcs_restore(&args->gcs))
+		goto core_restore_end;
+
 	/* All signals must be handled by thread leader */
 	ksigfillset(&to_block);
 	ret = sys_sigprocmask(SIG_SETMASK, &to_block, NULL, sizeof(k_rtsigset_t));
@@ -1735,6 +1738,9 @@ __visible long __export_restore_task(struct task_restore_args *args)
 	if (arch_shstk_switch_to_restorer(&args->shstk))
 		goto core_restore_end;
 
+	if (arch_gcs_switch_to_restorer(&args->gcs))
+		goto core_restore_end;
+
 	/*
 	 * Park vdso/vvar in a safe place if architecture doesn't support
 	 * mapping them with arch_prctl().
@@ -2249,6 +2255,9 @@ __visible long __export_restore_task(struct task_restore_args *args)
 	 * shadow stack.
 	 */
 	if (arch_shstk_restore(&args->shstk))
+		goto core_restore_end;
+
+	if (arch_gcs_restore(&args->gcs))
 		goto core_restore_end;
 
 	restore_finish_stage(task_entries_local, CR_STATE_RESTORE_CREDS);

@@ -520,7 +520,7 @@ $(TST_FILE:%=%.pid):	%.pid:	%
 	$(TEST_ENV) $(<D)/$(<F) --pidfile=$@ --outfile=$<.out --filename=$<.test
 
 $(TST_DIR:%=%.pid):	%.pid:	%
-	$(TEST_ENV) $(<D)/$(<F) --pidfile=$@ --outfile=$<.out --dirname=$<.test
+	$(TEST_ENV) (<D)/$(<F) --pidfile=$@ --outfile=$<.out --dirname=$<.test
 
 $(TST_DIR_FILE:%=%.pid):	%.pid:	%
 	$(TEST_ENV) $(<D)/$(<F) --pidfile=$@ --outfile=$<.out --dirname=$<.dir.test --filename=$<.test
@@ -535,7 +535,7 @@ shm-hugetlb.pid: shm-hugetlb
 	$(<D)/$(<F) --pidfile=$@ --outfile=$<.out --shmem_size=4194304
 
 env00.pid:	env00
-	$(<D)/$(<F) --pidfile=$@ --outfile=$<.out --envname=ENV_00_TEST
+	$(TEST_ENV) $(<D)/$(<F) --pidfile=$@ --outfile=$<.out --envname=ENV_00_TEST
 umask00.pid:	umask00
 	$(<D)/$(<F) --pidfile=$@ --outfile=$<.out --mask=0345
 

@@ -552,6 +552,9 @@ static int restore_thread_ctx(int pid, struct thread_ctx *ctx, bool restore_ext_
 {
 	int ret = 0;
 
+	struct user_gcs gcs;
+	struct iovec gcs_iov = { .iov_base = &gcs, .iov_len = sizeof(gcs) };
+
 	if (ptrace_set_regs(pid, &ctx->regs)) {
 		pr_perror("Can't restore registers (pid: %d)", pid);
 		ret = -1;
@@ -559,6 +562,10 @@ static int restore_thread_ctx(int pid, struct thread_ctx *ctx, bool restore_ext_
 
 	if (restore_ext_regs && compel_set_task_ext_regs(pid, &ctx->ext_regs))
 		ret = -1;
+
+	ptrace(PTRACE_GETREGSET, pid, 0x410 , &gcs_iov);
+	ctx->ext_regs.gcs = gcs;
+	compel_set_task_gcs_regs(pid, &ctx->ext_regs);
 
 	if (ptrace(PTRACE_SETSIGMASK, pid, sizeof(k_rtsigset_t), &ctx->sigmask)) {
 		pr_perror("Can't block signals");
@@ -636,7 +643,7 @@ int compel_execute_syscall(struct parasite_ctl *ctl, user_regs_struct_t *regs, c
 		return -1;
 	}
 
-	err = parasite_run(pid, PTRACE_CONT, ctl->ictx.syscall_ip, 0, regs, &ctl->orig);
+	err = parasite_run(pid, PTRACE_CONT, ctl->ictx.syscall_ip, (void *)ctl->orig.regs.sp, regs, &ctl->orig);
 	if (!err)
 		err = parasite_trap(ctl, pid, regs, &ctl->orig, false);
 

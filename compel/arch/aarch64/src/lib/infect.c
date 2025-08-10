@@ -14,34 +14,10 @@
 #include "infect-priv.h"
 #include "asm/breakpoints.h"
 #include <linux/prctl.h>
+#include "asm/gcs-types.h"
 
 unsigned __page_size = 0;
 unsigned __page_shift = 0;
-
-#ifndef NT_ARM_GCS
-#define NT_ARM_GCS 0x410 /* ARM GCS state */
-#endif
-
-/* When set PR_SHADOW_STACK_ENABLE flag allocates a Guarded Control Stack */
-#ifndef PR_SHADOW_STACK_ENABLE
-#define PR_SHADOW_STACK_ENABLE      (1UL << 0)
-#endif
-
-/* Allows explicit GCS stores (eg. using GCSSTR) */
-#ifndef PR_SHADOW_STACK_WRITE
-#define PR_SHADOW_STACK_WRITE       (1UL << 1)
-#endif
-
-/* Allows explicit GCS pushes (eg. using GCSPUSHM) */
-#ifndef PR_SHADOW_STACK_PUSH
-#define PR_SHADOW_STACK_PUSH        (1UL << 2)
-#endif
-
-/* copied from: arch/arm64/include/asm/sysreg.h */
-#define GCS_CAP_VALID_TOKEN 0x1
-#define GCS_CAP_ADDR_MASK 0xFFFFFFFFFFFFF000ULL
-#define GCS_CAP(x) ((((unsigned long)x) & GCS_CAP_ADDR_MASK) | GCS_CAP_VALID_TOKEN)
-#define GCS_SIGNAL_CAP(addr) (((unsigned long)addr) & GCS_CAP_ADDR_MASK)
 
 /*
  * Injected syscall instruction
@@ -128,7 +104,7 @@ int compel_get_task_regs(pid_t pid, user_regs_struct_t *regs, user_fpregs_struct
 		goto err;
 	}
 
-	memset(&fpsimd->gcs, 0, sizeof(fpsimd->gcs));
+	// memset(&fpsimd->gcs, 0, sizeof(fpsimd->gcs));
 
 	if (ptrace(PTRACE_GETREGSET, pid, NT_ARM_GCS, &gcs_iov) == 0) {
 		pr_info("gcs: GCSPR_EL0 for %d: 0x%llx, features: 0x%llx\n",
@@ -159,6 +135,26 @@ int compel_set_task_ext_regs(pid_t pid, user_fpregs_struct_t *ext_regs)
 	}
 	return 0;
 }
+
+int compel_set_task_gcs_regs(pid_t pid, user_fpregs_struct_t *ext_regs)
+{
+	struct iovec iov;
+
+	pr_info("gcs: restoring GCS registers for %d\n", pid);
+	pr_info("gcs: restoring GCS: gcspr=%llx features=%llx\n",
+			ext_regs->gcs.gcspr_el0, ext_regs->gcs.features_enabled);
+
+	iov.iov_base = &ext_regs->gcs;
+	iov.iov_len  = sizeof(ext_regs->gcs);
+
+	if (ptrace(PTRACE_SETREGSET, pid, NT_ARM_GCS, &iov)) {
+		pr_perror("gcs: Failed to set GCS registers for %d", pid);
+		return -1;
+	}
+
+	return 0;
+}
+
 
 int compel_syscall(struct parasite_ctl *ctl, int nr, long *ret, unsigned long arg1, unsigned long arg2,
 		   unsigned long arg3, unsigned long arg4, unsigned long arg5, unsigned long arg6)
@@ -197,8 +193,7 @@ void *remote_mmap(struct parasite_ctl *ctl, void *addr, size_t length, int prot,
 void parasite_setup_regs(unsigned long new_ip, void *stack, user_regs_struct_t *regs)
 {
 	regs->pc = new_ip;
-	if (stack)
-		regs->sp = (unsigned long)stack;
+	regs->sp = (unsigned long)stack;
 }
 
 bool arch_can_dump_task(struct parasite_ctl *ctl)
