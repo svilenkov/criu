@@ -3,27 +3,27 @@
 #endif
 
 /* Shadow Stack/Guarded Control Stack interface */
-#define PR_GET_SHADOW_STACK_STATUS      74
-#define PR_SET_SHADOW_STACK_STATUS      75
-#define PR_LOCK_SHADOW_STACK_STATUS     76
+#define PR_GET_SHADOW_STACK_STATUS	74
+#define PR_SET_SHADOW_STACK_STATUS	75
+#define PR_LOCK_SHADOW_STACK_STATUS	76
 
 /* When set PR_SHADOW_STACK_ENABLE flag allocates a Guarded Control Stack */
 #ifndef PR_SHADOW_STACK_ENABLE
-#define PR_SHADOW_STACK_ENABLE      (1UL << 0)
+#define PR_SHADOW_STACK_ENABLE		(1UL << 0)
 #endif
 
 /* Allows explicit GCS stores (eg. using GCSSTR) */
 #ifndef PR_SHADOW_STACK_WRITE
-#define PR_SHADOW_STACK_WRITE       (1UL << 1)
+#define PR_SHADOW_STACK_WRITE		(1UL << 1)
 #endif
 
 /* Allows explicit GCS pushes (eg. using GCSPUSHM) */
 #ifndef PR_SHADOW_STACK_PUSH
-#define PR_SHADOW_STACK_PUSH        (1UL << 2)
+#define PR_SHADOW_STACK_PUSH		(1UL << 2)
 #endif
 
 #define PR_SHADOW_STACK_ALL_MODES \
-        PR_SHADOW_STACK_ENABLE | PR_SHADOW_STACK_WRITE | PR_SHADOW_STACK_PUSH
+	PR_SHADOW_STACK_ENABLE | PR_SHADOW_STACK_WRITE | PR_SHADOW_STACK_PUSH
 
 /* copied from: arch/arm64/include/asm/sysreg.h */
 #define GCS_CAP_VALID_TOKEN 0x1
@@ -31,9 +31,7 @@
 #define GCS_CAP(x) ((((unsigned long)x) & GCS_CAP_ADDR_MASK) | GCS_CAP_VALID_TOKEN)
 #define GCS_SIGNAL_CAP(addr) (((unsigned long)addr) & GCS_CAP_ADDR_MASK)
 
-#ifdef __aarch64__
-# include <asm/hwcap.h>
-#endif
+#include <asm/hwcap.h>
 
 #ifndef HWCAP_GCS
 #else

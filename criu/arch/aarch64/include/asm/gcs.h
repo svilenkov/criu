@@ -4,12 +4,12 @@
 #include "gcs-types.h"
 
 struct rst_gcs_info {
-	unsigned long vma_start;       /* start of GCS VMA */
-	unsigned long vma_size;        /* size of GCS VMA */
-	unsigned long premapped_addr;  /* premapped buffer */
-	unsigned long tmp_gcs;         /* temp area for GCS if needed */
-	u64 gcspr_el0;                 /* GCS pointer */
-	u64 features_enabled;          /* GCS flags */
+	unsigned long vma_start;		/* start of GCS VMA */
+	unsigned long vma_size;			/* size of GCS VMA */
+	unsigned long premapped_addr;	/* premapped buffer */
+	unsigned long tmp_gcs;			/* temp area for GCS if needed */
+	u64 gcspr_el0;					/* GCS pointer */
+	u64 features_enabled;			/* GCS flags */
 };
 
 #define rst_gcs_info rst_gcs_info
@@ -18,12 +18,12 @@ struct task_restore_args;
 struct pstree_item;
 
 int arch_gcs_prepare(struct pstree_item *item, CoreEntry *core,
-		       struct task_restore_args *ta);
+				struct task_restore_args *ta);
 #define arch_gcs_prepare arch_gcs_prepare
 
 
 int arch_shstk_trampoline(struct pstree_item *item, CoreEntry *core,
-		      int (*func)(void *arg), void *arg);
+				int (*func)(void *arg), void *arg);
 #define arch_shstk_trampoline arch_shstk_trampoline
 
 #ifdef CR_NOGLIBC
@@ -75,30 +75,30 @@ static always_inline unsigned long *gcsss2(void)
 
 static inline unsigned long *gcsstr(unsigned long val)
 {
-    unsigned long *ssp;
+	unsigned long *ssp;
 
-    asm volatile (
-        "mov x0, %1\n"
-        ".inst 0xd91f1c00\n"     // GCSSTR x0, [GCSPR_EL0 - 8]
-        "mov %0, x0\n"
-        : "=r"(ssp)
-        : "r"(val)
-        : "x0", "memory"
-    );
+	asm volatile (
+		"mov x0, %1\n"
+		".inst 0xd91f1c00\n"	// GCSSTR x0, [GCSPR_EL0 - 8]
+		"mov %0, x0\n"
+		: "=r"(ssp)
+		: "r"(val)
+		: "x0", "memory"
+	);
 
-    return ssp;  // This is the new SSP (after storing val)
+	return ssp;  // This is the new SSP (after storing val)
 }
 
 static inline void gcsstrp(unsigned long addr, unsigned long val)
 {
-    asm volatile(
+	asm volatile(
 		"mov x0, %0\n"
-        "mov x1, %1\n"
-        ".inst 0xd91f1c01\n"  // GCSSTR x1, [x0]
+		"mov x1, %1\n"
+		".inst 0xd91f1c01\n"  // GCSSTR x1, [x0]
 		"mov x0, #0\n"
-        :
-        : "r"(addr), "r"(val)
-        : "x0", "x1", "memory");
+		:
+		: "r"(addr), "r"(val)
+		: "x0", "x1", "memory");
 }
 /* clang-format on */
 
@@ -129,15 +129,15 @@ static always_inline int gcs_restore(struct rst_gcs_info *gcs)
 	}
 
 	val = ALIGN_DOWN(GCS_SIGNAL_CAP(gcspr), 8);
-	pr_debug("gcs: about to GCSSTR VAL=%lx write at GCSPR=%lx\n", val, gcspr);
+	pr_debug("gcs: GCSSTR VAL=%lx write at GCSPR=%lx\n", val, gcspr);
 	gcsstrp(gcspr, val);
 
 	val = ALIGN_DOWN(GCS_SIGNAL_CAP(gcspr), 8) | 0x1;
-	pr_debug("gcs: about to GCSSTR VAL=%lx write at GCSPR=%lx\n", val, gcspr);
+	pr_debug("gcs: GCSSTR VAL=%lx write at GCSPR=%lx\n", val, gcspr);
 	gcsstrp(gcspr - 8, val);
 
 	jump_to = gcspr - 8;
-	pr_debug("gcs: about to jump using GCSSS1 to: %lx\n", jump_to);
+	pr_debug("gcs: about to switch stacks via GCSSS1 to: %lx\n", jump_to);
 	gcsss1((unsigned long *) jump_to);
 
 	return 0;
@@ -156,10 +156,10 @@ static always_inline int gcs_switch_to_restorer(struct rst_gcs_info *gcs)
 
 	addr = gcs->premapped_addr + gcs->vma_size;
 
-	if (addr % PAGE_SIZE != 0)
-		pr_err("gcs: addr 0x%lx is NOT page-aligned (PAGE_SIZE=0x%lx)\n", addr, PAGE_SIZE);
-	else
-		pr_debug("gcs: addr 0x%lx is page-aligned\n", addr);
+	if (addr % PAGE_SIZE != 0) {
+		pr_err("gcs: 0x%lx not page-aligned to size 0x%lx\n", addr, PAGE_SIZE);
+		return -1;
+	}
 
 	ret = sys_munmap((void *) gcs->premapped_addr + gcs->vma_size, PAGE_SIZE);
 	if (ret < 0) {
@@ -170,7 +170,7 @@ static always_inline int gcs_switch_to_restorer(struct rst_gcs_info *gcs)
 	ret = gcs_map(addr, PAGE_SIZE);
 
 	if (ret < 0) {
-		pr_err("gcs: failed to gcs_map(0x%lx, PAGE_SIZE=0x%lx)\n", addr, PAGE_SIZE);
+		pr_err("gcs: failed to gcs_map(0x%lx, 0x%lx)\n", addr, PAGE_SIZE);
 		return -1;
 	}
 

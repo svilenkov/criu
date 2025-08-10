@@ -64,7 +64,6 @@ struct rst_shstk_info {};
 struct rst_gcs_info {};
 #endif
 
-
 /*
  * We should be able to construct fpu sigframe in sigreturn_prep_fpu_frame,
  * so the mem_zone.rt_sigframe should be 64-bytes aligned. To make things

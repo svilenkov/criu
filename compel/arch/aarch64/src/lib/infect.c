@@ -193,7 +193,6 @@ void *remote_mmap(struct parasite_ctl *ctl, void *addr, size_t length, int prot,
 void parasite_setup_regs(unsigned long new_ip, void *stack, user_regs_struct_t *regs)
 {
 	regs->pc = new_ip;
-	// if (stack)
 	regs->sp = (unsigned long)stack;
 }
 
