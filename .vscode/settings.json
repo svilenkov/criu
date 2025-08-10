@@ -1,9 +1,0 @@
-{
-  "files.associations": {
-    "random": "c",
-    "restorer.h": "c",
-    "core-aarch64.pb-c.h": "c",
-    "compel-cpu.h": "c",
-    "hwcap.h": "c"
-  }
-}
