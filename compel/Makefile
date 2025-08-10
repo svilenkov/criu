@@ -8,6 +8,7 @@ ccflags-y		+= -DLIBDIR=\"$(LIBDIR)\"
 ccflags-y		+= -DSTATIC_LIB=\"$(LIBCOMPEL_A)\"
 ccflags-y		+= -DDYN_LIB=\"$(LIBCOMPEL_SO).$(COMPEL_SO_VERSION_MAJOR)\"
 ccflags-y		+= -iquote compel/arch/$(ARCH)/src/lib/include
+ccflags-y		+= -iquote criu/arch/$(ARCH)/include
 ccflags-y		+= -iquote compel/include
 ccflags-y		+= -fno-strict-aliasing
 ccflags-y		+= -fPIC

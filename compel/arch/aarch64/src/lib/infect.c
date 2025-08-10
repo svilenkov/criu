@@ -14,34 +14,10 @@
 #include "infect-priv.h"
 #include "asm/breakpoints.h"
 #include <linux/prctl.h>
+#include "asm/gcs-types.h"
 
 unsigned __page_size = 0;
 unsigned __page_shift = 0;
-
-#ifndef NT_ARM_GCS
-#define NT_ARM_GCS 0x410 /* ARM GCS state */
-#endif
-
-/* When set PR_SHADOW_STACK_ENABLE flag allocates a Guarded Control Stack */
-#ifndef PR_SHADOW_STACK_ENABLE
-#define PR_SHADOW_STACK_ENABLE      (1UL << 0)
-#endif
-
-/* Allows explicit GCS stores (eg. using GCSSTR) */
-#ifndef PR_SHADOW_STACK_WRITE
-#define PR_SHADOW_STACK_WRITE       (1UL << 1)
-#endif
-
-/* Allows explicit GCS pushes (eg. using GCSPUSHM) */
-#ifndef PR_SHADOW_STACK_PUSH
-#define PR_SHADOW_STACK_PUSH        (1UL << 2)
-#endif
-
-/* copied from: arch/arm64/include/asm/sysreg.h */
-#define GCS_CAP_VALID_TOKEN 0x1
-#define GCS_CAP_ADDR_MASK 0xFFFFFFFFFFFFF000ULL
-#define GCS_CAP(x) ((((unsigned long)x) & GCS_CAP_ADDR_MASK) | GCS_CAP_VALID_TOKEN)
-#define GCS_SIGNAL_CAP(addr) (((unsigned long)addr) & GCS_CAP_ADDR_MASK)
 
 /*
  * Injected syscall instruction
