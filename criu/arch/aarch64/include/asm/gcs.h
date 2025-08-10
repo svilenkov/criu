@@ -13,14 +13,19 @@
 #define PR_SHADOW_STACK_ALL_MODES \
         PR_SHADOW_STACK_ENABLE | PR_SHADOW_STACK_WRITE | PR_SHADOW_STACK_PUSH
 
-// #define SHADOW_STACK_SET_TOKEN (1ULL << 0)     /* Set up a restore token in the shadow stack */
-// #define SHADOW_STACK_SET_MARKER (1ULL << 1)     /* Set up a top of stack merker in the shadow stack */
-
-
 #define GCS_CAP_VALID_TOKEN 0x1
 #define GCS_CAP_ADDR_MASK 0xFFFFFFFFFFFFF000ULL
 #define GCS_CAP(x) ((((unsigned long)x) & GCS_CAP_ADDR_MASK) | GCS_CAP_VALID_TOKEN)
 #define GCS_SIGNAL_CAP(addr) (((unsigned long)addr) & GCS_CAP_ADDR_MASK)
+
+#ifdef __aarch64__
+# include <asm/hwcap.h>
+#endif
+
+#ifndef HWCAP_GCS
+#else
+#define HWCAP_GCS (1UL << 32)
+#endif
 
 struct rst_gcs_info {
 	unsigned long vma_start;       /* start of GCS VMA */
@@ -160,6 +165,12 @@ static always_inline int gcs_restore(struct rst_gcs_info *gcs)
 	pr_info("  features_enabled: %lx\n", gcs->features_enabled);
 	pr_info("=====================\n");
 
+
+	if (!(gcs && gcs->features_enabled & PR_SHADOW_STACK_ENABLE)) {
+		pr_debug("GTFO\n");
+		return 0;
+	}
+
 	if (!gcs->vma_start || !gcs->vma_size) {
 		pr_warn("[gcs] Cannot restore without vma start/size");
 		return 0;
@@ -199,6 +210,15 @@ static always_inline int gcs_switch_to_restorer(struct rst_gcs_info *gcs)
 	int ret;
 	unsigned long *ssp;
 	unsigned long addr;
+
+	pr_debug("gcs: gcspr_el0: 0x%lx\n features_enabled: 0x%lx\n",
+		gcs->gcspr_el0,
+		gcs->features_enabled);
+
+	if (!(gcs && gcs->features_enabled & PR_SHADOW_STACK_ENABLE)) {
+		pr_debug("GTFO\n");
+		return 0;
+	}
 
 	pr_debug("[gcs] gcs_switch_to_restorer <ENTER>\n");
 	// ret = gcs_map(gcs->vma_start, gcs->vma_size);

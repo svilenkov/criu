@@ -2,7 +2,6 @@
 #include <sys/wait.h>
 
 #include <common/list.h>
-
 #include <compel/cpu.h>
 
 #include "pstree.h"
@@ -10,11 +9,44 @@
 #include "rst-malloc.h"
 #include "vma.h"
 
+#include <sys/auxv.h>
+#include <stdbool.h>
+
+static bool task_has_gcs_enabled(UserAarch64GcsEntry *gcs)
+{
+	pr_debug("gcs: gcspr_el0: 0x%lx\n features_enabled: 0x%lx\n",
+		gcs->gcspr_el0,
+		gcs->features_enabled);
+	return gcs && (gcs->features_enabled & PR_SHADOW_STACK_ENABLE) != 0;
+}
+
+static bool host_supports_gcs(void)
+{
+	unsigned long hwcap = getauxval(AT_HWCAP);
+	return (hwcap & HWCAP_GCS) != 0;
+}
 
 static bool task_needs_gcs(struct pstree_item *item, CoreEntry *core)
 {
-	// TODO:
-	return true;
+	UserAarch64GcsEntry *gcs;
+
+	if (!task_alive(item))
+		return false;
+
+	gcs = core->ti_aarch64->gcs;
+
+	if (task_has_gcs_enabled(gcs)) {
+		if (!host_supports_gcs()) {
+			pr_warn_once("Restoring task with GCS on non-GCS host\n");
+			return false;
+		}
+
+		pr_info("Restoring task with GCS\n");
+		return true;
+	}
+
+	pr_info("Restoring a task without GCS\n");
+	return false;
 }
 
 static int gcs_prepare_task(struct vm_area_list *vmas,
