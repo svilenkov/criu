@@ -753,8 +753,8 @@ int prepare_mm_pid(struct pstree_item *i)
 			ri->vmas.rst_priv_size += vma_area_len(vma);
 			if (vma_has_guard_gap_hidden(vma))
 				ri->vmas.rst_priv_size += PAGE_SIZE;
-			if (vma_area_is(vma, VMA_AREA_SHSTK))
-				ri->vmas.rst_priv_size += PAGE_SIZE;
+/* 			if (vma_area_is(vma, VMA_AREA_SHSTK))
+				ri->vmas.rst_priv_size += PAGE_SIZE; */
 		}
 
 		pr_info("vma 0x%" PRIx64 " 0x%" PRIx64 "\n", vma->e->start, vma->e->end);
@@ -901,8 +901,8 @@ static int premap_private_vma(struct pstree_item *t, struct vma_area *vma, void 
 	 * map an extra page for shadow stack VMAs, it will be used as a
 	 * temporary shadow stack
 	 */
-	if (vma_area_is(vma, VMA_AREA_SHSTK))
-		size += PAGE_SIZE;
+/* 	if (vma_area_is(vma, VMA_AREA_SHSTK))
+		size += PAGE_SIZE; */
 
 	if (!vma_inherited(vma)) {
 		int flag = 0;

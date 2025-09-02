@@ -750,6 +750,8 @@ __visible long __export_restore_thread(struct thread_restore_args *args)
 	int my_pid = sys_gettid();
 	int ret;
 
+	pr_info("%s:%d#%s\n", __FILE__, __LINE__, __func__);
+
 	if (my_pid != args->pid) {
 		pr_err("Thread pid mismatch %d/%d\n", my_pid, args->pid);
 		goto core_restore_end;
@@ -1102,6 +1104,78 @@ static int enable_uffd(int uffd, unsigned long addr, unsigned long len)
 	return 0;
 }
 
+// #include "log.h"
+// #include "util.h"
+// #include <sys/syscall.h>
+// #include <unistd.h>
+// #include <fcntl.h>
+
+// static void dump_maps_around_addr(unsigned long addr, int lines)
+// {
+//     char buf[512];
+//     int fd;
+//     int n;
+
+//     fd = sys_open("/proc/self/maps", O_RDONLY, 0);
+//     if (fd < 0) {
+//         pr_err("dump_maps: cannot open /proc/self/maps\n");
+//         return;
+//     }
+
+//     while ((n = sys_read(fd, buf, sizeof(buf)-1)) > 0) {
+//         buf[n] = '\0';
+//         // crude, just dump whole maps
+//         pr_info("maps: %s", buf);
+//     }
+
+//     sys_close(fd);
+// }
+
+
+#include "log.h"
+#include "util.h"
+#include "stdio.h"
+#include <sys/syscall.h>
+#include <unistd.h>
+#include <fcntl.h>
+
+// static int utoa_dec_ul(unsigned long v, char *out)
+// {
+//     char tmp[32];
+//     int i = 0, j = 0;
+//     do { tmp[i++] = '0' + (v % 10); v /= 10; } while (v);
+//     while (i--) out[j++] = tmp[i];
+//     out[j] = '\0';
+//     return j;
+// }
+
+static void dump_maps_to_filep(pid_t pid)
+{
+	char filename[256];
+    char buf[4096];
+    int n;
+	const char *divider = "\n------\n";
+
+
+    int in = sys_open("/proc/self/maps", O_RDONLY, 0);
+    int out = sys_open(filename, O_WRONLY | O_CREAT | O_APPEND, 0644);
+	std_sprintf(filename, "/tmp/criu-maps-%d.log", pid);
+
+
+    if (in < 0 || out < 0)
+	goto done;
+
+    while ((n = sys_read(in, buf, sizeof(buf))) > 0) {
+		sys_write(out, buf, n);
+	}
+
+    sys_write(out, divider, 9);
+
+done:
+    if (in >= 0)  sys_close(in);
+    if (out >= 0) sys_close(out);
+}
+
 static int vma_remap(VmaEntry *vma_entry, int uffd)
 {
 	unsigned long src = vma_premmaped_start(vma_entry);
@@ -1109,7 +1183,7 @@ static int vma_remap(VmaEntry *vma_entry, int uffd)
 	unsigned long len = vma_entry_len(vma_entry);
 	unsigned long guard = 0, tmp;
 
-	pr_info("Remap %lx->%lx len %lx\n", src, dst, len);
+	pr_info("Remap %lx->%lx len %lx [%lx - %lx]\n", src, dst, len, dst, dst+len);
 
 	if (src - dst < len)
 		guard = dst;
@@ -1146,6 +1220,7 @@ static int vma_remap(VmaEntry *vma_entry, int uffd)
 
 		unsigned long addr;
 
+		// pr_debug("Map guard page\n");
 		/* Map guard page (step 2) */
 		tmp = sys_mmap((void *)guard, PAGE_SIZE, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, 0, 0);
 		if (tmp != guard) {
@@ -1153,6 +1228,7 @@ static int vma_remap(VmaEntry *vma_entry, int uffd)
 			return -1;
 		}
 
+		// pr_debug("Move src to non-overlapping place\n");
 		/* Move src to non-overlapping place (step 3) */
 		addr = sys_mmap(NULL, len, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, 0, 0);
 		if (IS_ERR((void *)addr)) {
@@ -1160,21 +1236,31 @@ static int vma_remap(VmaEntry *vma_entry, int uffd)
 			return -1;
 		}
 
+		// pr_debug("tmp = sys_mremap(src, len, len, ...)\n");
 		tmp = sys_mremap(src, len, len, MREMAP_MAYMOVE | MREMAP_FIXED, addr);
 		if (tmp != addr) {
 			pr_err("Unable to remap %lx -> %lx (%lx)\n", src, addr, tmp);
 			return -1;
 		}
 
+		// pr_debug("src = addr\n");
+
 		src = addr;
 	}
 
+	pr_debug("tmp = sys_mremap(src, len, len, MREMAP_MAYMOVE | MREMAP_FIXED, dst)\n");
+	// dump_maps_around_addr(addr, 5);
+	// dump_maps_around_addr(dst, 20);
+	dump_maps_to_filep(sys_getpid());
+	// sys_munmap((void *)dst, len);
+
 	tmp = sys_mremap(src, len, len, MREMAP_MAYMOVE | MREMAP_FIXED, dst);
 	if (tmp != dst) {
-		pr_err("Unable to remap %lx -> %lx\n", src, dst);
+		pr_err("Unable to remap %lx -> %lx\n rc=%ld\n", src, dst, tmp);
 		return -1;
 	}
 
+	pr_debug("vma_entry_can_be_lazy(vma_entry)\n");
 	/*
 	 * If running in userfaultfd/lazy-pages mode pages with
 	 * MAP_ANONYMOUS and MAP_PRIVATE are remapped but without the
@@ -1686,6 +1772,7 @@ __visible long __export_restore_task(struct task_restore_args *args)
 	pid_t my_pid = sys_getpid();
 	rt_sigaction_t act;
 	bool has_vdso_proxy;
+	// void *res;
 
 	bootstrap_start = args->bootstrap_start;
 	bootstrap_len = args->bootstrap_len;
@@ -1732,6 +1819,7 @@ __visible long __export_restore_task(struct task_restore_args *args)
 		pr_debug("lazy-pages: uffd %d\n", args->uffd);
 	}
 
+	pr_info("gcs: switching to restorer for pid=%d\n", args->thread_args->pid);
 	if (arch_shstk_switch_to_restorer(&args->shstk))
 		goto core_restore_end;
 
@@ -1790,8 +1878,23 @@ __visible long __export_restore_task(struct task_restore_args *args)
 		 * shadow stack VMAs cannot be remapped, they must be
 		 * recreated with map_shadow_stack system call
 		 */
-		if (vma_entry_is(vma_entry, VMA_AREA_SHSTK))
+		if (vma_entry_is(vma_entry, VMA_AREA_SHSTK)) {
+			pr_debug("SHSTK: remap vma [LEFT]:"
+				" start=%lx end=%lx len=%lx prot=%x flags=%x status=%x fd=%lld\n",
+				(unsigned long)vma_entry->start,
+				(unsigned long)vma_entry->end,
+				(unsigned long)(vma_entry->end - vma_entry->start),
+				(unsigned int) vma_entry->prot,
+				(unsigned int) vma_entry->flags,
+				(unsigned int) vma_entry->status,
+				(long long)vma_entry->fd);
+
+			if(shstk_vma_restore((void * )vma_premmaped_start(vma_entry),
+				vma_entry->start,
+				vma_entry_len(vma_entry)))
+				goto core_restore_end;
 			continue;
+		}
 
 		if (vma_remap(vma_entry, args->uffd))
 			goto core_restore_end;
@@ -1814,13 +1917,30 @@ __visible long __export_restore_task(struct task_restore_args *args)
 		 * shadow stack VMAs cannot be remapped, they must be
 		 * recreated with map_shadow_stack system call
 		 */
-		if (vma_entry_is(vma_entry, VMA_AREA_SHSTK))
+		if (vma_entry_is(vma_entry, VMA_AREA_SHSTK)) {
+			pr_debug("SHSTK: remap vma [RIGHT]:"
+				" start=%lx end=%lx len=%lx prot=%x flags=%x status=%x fd=%lld\n",
+				(unsigned long)vma_entry->start,
+				(unsigned long)vma_entry->end,
+				(unsigned long)(vma_entry->end - vma_entry->start),
+				(unsigned int) vma_entry->prot,
+				(unsigned int) vma_entry->flags,
+				(unsigned int) vma_entry->status,
+				(long long)vma_entry->fd);
+
+			pr_debug("vma_premmaped_start(vma_entry)=%lx vma_entry->start=%lx\n", (unsigned long)vma_premmaped_start(vma_entry), vma_entry->start);
+			if (shstk_vma_restore((void * )vma_premmaped_start(vma_entry),
+							vma_entry->start,
+							vma_entry_len(vma_entry)))
+				goto core_restore_end;
 			continue;
+		}
 
 		if (vma_remap(vma_entry, args->uffd))
 			goto core_restore_end;
 	}
 
+	pr_debug("sys_prctl(PR_SET_THP_DISABLE, ...\n");
 	ret = sys_prctl(PR_SET_THP_DISABLE, args->thp_disabled, 0, 0, 0);
 	if (ret) {
 		pr_err("Cannot restore THP_DISABLE=%d flag: %ld\n", args->thp_disabled, ret);
@@ -2064,6 +2184,7 @@ __visible long __export_restore_task(struct task_restore_args *args)
 	 */
 	rt_sigframe = (void *)&args->t->mz->rt_sigframe;
 
+	pr_debug("restore_thread_common(args->t)\n");
 	if (restore_thread_common(args->t))
 		goto core_restore_end;
 

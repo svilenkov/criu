@@ -270,8 +270,8 @@ int kdat_has_shstk(void)
 
 	if (syscall(__NR_arch_prctl, ARCH_SHSTK_STATUS, &features)) {
 		/* kernels that don't support shadow stack return -EINVAL */
-		if (errno == EINVAL)
-			return 0;
+		// if (errno == EINVAL)
+		// 	return 0;
 		pr_perror("Cannot get shadow stack status");
 		return 1;
 	}

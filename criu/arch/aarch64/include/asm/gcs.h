@@ -26,14 +26,23 @@ int arch_shstk_trampoline(struct pstree_item *item, CoreEntry *core,
 				int (*func)(void *arg), void *arg);
 #define arch_shstk_trampoline arch_shstk_trampoline
 
+static always_inline void shstk_set_restorer_stack(struct rst_shstk_info *gcs, void *ptr)
+{
+	gcs->tmp_gcs = (long unsigned) ptr;
+}
+#define shstk_set_restorer_stack shstk_set_restorer_stack
+
+static always_inline long shstk_restorer_stack_size() { return PAGE_SIZE; }
+#define shstk_restorer_stack_size shstk_restorer_stack_size
+
 #ifdef CR_NOGLIBC
 #include <compel/plugins/std/syscall.h>
 #include <compel/cpu.h>
 #include "vma.h"
 
-static unsigned long gcs_map(unsigned long addr, unsigned long size)
+static unsigned long gcs_map(unsigned long addr, unsigned long size, unsigned int flags)
 {
-	long gcspr = sys_map_shadow_stack(addr, size, 0x1);
+	long gcspr = sys_map_shadow_stack(addr, size, flags);
 	pr_info("gcs: syscall: map_shadow_stack at=%lx size=%ld\n", addr, size);
 
 	if (gcspr < 0) {
@@ -87,56 +96,180 @@ static inline void gcsstr(unsigned long addr, unsigned long val)
 }
 /* clang-format on */
 
+static always_inline int gcs_vma_restore(unsigned long *gcs_data, unsigned long vma_start, unsigned long vma_size)
+{
+	unsigned long shstk, tmp, i;
+	unsigned long ret;
+
+	shstk = gcs_map(0, vma_size, 1);
+	if (shstk < 0) {
+		pr_err("Failed to map shadow stack at %lx: %ld\n", shstk, shstk);
+	}
+
+	for (i = 0; i < vma_size / 8; i++)
+		gcsstr(shstk + i * 8, gcs_data[i]);
+
+	pr_debug("unmap %lx %ld\n", (unsigned long) gcs_data, vma_size);
+	ret = sys_munmap(gcs_data, vma_size);
+	if(ret < 0) {
+		pr_err("Failed to unmap premmaped shadow stack\n");
+		return ret;
+	}
+
+	if ((unsigned long)shstk == vma_start) {
+        return 0;
+    }
+
+	pr_debug("sys_mremap shstk=%lx\n", shstk);
+	tmp = sys_mremap(shstk, vma_size, vma_size, MREMAP_MAYMOVE | MREMAP_FIXED, vma_start);
+	if(tmp != vma_start) {
+		pr_err("Unable to remap %lx -> %lx: %lx\n", shstk, vma_start, tmp);
+		return -1;
+	}
+
+	return 0;
+}
+#define shstk_vma_restore gcs_vma_restore
+
+// static always_inline int gcs_vma_restore(unsigned long *gcs_data, unsigned long vma_start, unsigned long vma_size)
+// {
+// 	unsigned long shstk, tmp;
+// 	unsigned long ret;
+
+// 	pr_debug("sys_mremap shstk=%lx\n", (unsigned long)gcs_data);
+// 	tmp = sys_mremap((unsigned long)gcs_data, vma_size, vma_size, MREMAP_MAYMOVE | MREMAP_FIXED, vma_start);
+// 	if(tmp != vma_start) {
+// 		pr_err("Unable to remap %lx -> %lx: %lx\n", (unsigned long)gcs_data, vma_start, tmp);
+// 		return -1;
+// 	}
+
+// 	pr_debug("unmap %lx %ld\n", (unsigned long) vma_start, vma_size);
+// 	ret = sys_munmap((void *)vma_start, vma_size);
+// 	if(ret < 0) {
+// 		pr_err("Failed to unmap premmaped shadow stack\n");
+// 		return ret;
+// 	}
+
+// 	ret = sys_munmap(gcs_data, vma_size);
+// 	if(ret < 0) {
+// 		pr_err("Failed to unmap premmaped shadow stack\n");
+// 		return ret;
+// 	}
+
+// 	shstk = gcs_map(vma_start, vma_size, 1);
+// 	if (shstk < 0) {
+// 		pr_err("Failed to map shadow stack at %lx: %ld\n", shstk, shstk);
+// 	}
+
+// 	// for (i = 0; i < vma_size / 8; i++)
+// 	// 	gcsstr(shstk + i * 8, gcs_data[i]);
+
+
+// 	// if ((unsigned long)shstk == vma_start) {
+//     //     // already at the right place, nothing to move
+//     //     return 0;
+//     // }
+
+// 	// pr_debug("sys_mremap shstk=%lx\n", shstk);
+// 	// tmp = sys_mremap(shstk, vma_size, vma_size, MREMAP_MAYMOVE | MREMAP_FIXED, vma_start);
+// 	// if(tmp != vma_start) {
+// 	// 	pr_err("Unable to remap %lx -> %lx: %lx\n", shstk, vma_start, tmp);
+// 	// 	return -1;
+// 	// }
+
+// 	return 0;
+// }
+// #define shstk_vma_restore gcs_vma_restore
+
 static always_inline int gcs_restore(struct rst_shstk_info *gcs)
 {
-	unsigned long gcspr = gcs->vma_start + gcs->vma_size - 8;
-	unsigned long gcs_top = gcs->vma_size / 8 - 1;
-	unsigned long *gcs_data = (unsigned long *) gcs->premapped_addr;
-	unsigned long val;
-	unsigned long jump_to;
-	unsigned long ret;
+	unsigned long gcspr, val;
 
 	if (!(gcs && gcs->features_enabled & PR_SHADOW_STACK_ENABLE)) {
 		return 0;
 	}
 
-	if (!gcs->vma_start || !gcs->vma_size) {
-		pr_warn("gcs: Cannot restore without vma start/size");
-		return 0;
-	}
-
-	ret = gcs_map(gcs->vma_start, gcs->vma_size);
-	if(ret == -1) {
-		pr_err("gcs: unable to map shadow stack\n");
-		return -1;
-	}
-
-	for (; gcspr >= gcs->gcspr_el0; gcspr -= 8, gcs_top--) {
-		gcsstr(gcspr, gcs_data[gcs_top]);
-	}
+	gcspr = gcs->gcspr_el0;
 
 	val = ALIGN_DOWN(GCS_SIGNAL_CAP(gcspr), 8);
-	pr_debug("gcs: GCSSTR VAL=%lx write at GCSPR=%lx\n", val, gcspr);
+	pr_debug("gcs: [0] GCSSTR VAL=%lx write at GCSPR=%lx\n", val, gcspr);
 	gcsstr(gcspr, val);
 
 	val = ALIGN_DOWN(GCS_SIGNAL_CAP(gcspr), 8) | 0x1;
-	pr_debug("gcs: GCSSTR VAL=%lx write at GCSPR=%lx\n", val, gcspr);
-	gcsstr(gcspr - 8, val);
+	pr_debug("gcs: [1] GCSSTR VAL=%lx write at GCSPR=%lx\n", val, gcspr);
+	gcspr -= 8;
+	gcsstr(gcspr, val);
 
-	jump_to = gcspr - 8;
-	pr_debug("gcs: about to switch stacks via GCSSS1 to: %lx\n", jump_to);
-	gcsss1((unsigned long *) jump_to);
-
-	pr_debug("gcs: about to unmap gcs_data=%p size=%lx", gcs_data, gcs->vma_size + PAGE_SIZE);
-	ret = sys_munmap(gcs_data, gcs->vma_size + PAGE_SIZE);
-	if (ret < 0) {
-		pr_err("Failed to unmap premmaped shadow stack\n");
-		return ret;
-	}
-
-
+	// jump_to = gcspr;
+	pr_debug("gcs: about to switch stacks via GCSSS1 to: %lx\n", gcspr);
+	gcsss1((unsigned long *) gcspr);
 	return 0;
 }
+
+// static always_inline int gcs_restore(struct rst_shstk_info *gcs)
+// {
+// 	unsigned long gcspr = gcs->vma_start + gcs->vma_size - 8;
+// 	unsigned long gcs_top = gcs->vma_size / 8 - 1;
+// 	unsigned long *gcs_data = (unsigned long *) gcs->premapped_addr;
+// 	unsigned long val;
+// 	unsigned long jump_to;
+// 	unsigned long ret;
+
+// 	pr_debug("gcs: restore vma_range=[%lx - %lx ]size=%lx\n", gcs->vma_start, gcspr + 8, gcs->vma_size);
+// 	pr_debug("gcs: restore gcspr=%lx\n", gcspr);
+// 	pr_debug("gcs: restore gcsp_top=%lx\n", gcs_top);
+// 	pr_debug("gcs: restore gcs_data=%lx\n", gcs->premapped_addr);
+
+
+// 	if (!(gcs && gcs->features_enabled & PR_SHADOW_STACK_ENABLE)) {
+// 		return 0;
+// 	}
+
+// 	if (!gcs->vma_start || !gcs->vma_size) {
+// 		pr_warn("gcs: Cannot restore without vma start/size");
+// 		return 0;
+// 	}
+
+// 	// ret = sys_munmap((void *) gcs->vma_start, gcs->vma_size);
+// 	// if (ret < 0) {
+// 	// 	pr_err("gcs: Failed to unmap regular VMA before shadow map");
+// 	// 	return -1;
+// 	// }
+
+// 	ret = gcs_map(gcs->vma_start, gcs->vma_size, 1);
+// 	if(ret == -1) {
+// 		pr_err("gcs: unable to map shadow stack\n");
+// 		return -1;
+// 	}
+
+// 	pr_debug("gcs->gcspr_el0 = %lx\n", gcs->gcspr_el0);
+// 	for (; gcspr >= gcs->gcspr_el0; gcspr -= 8, gcs_top--) {
+// 		gcsstr(gcspr, gcs_data[gcs_top]);
+// 		if (gcs->gcspr_el0 == gcspr) {
+// 			pr_debug("gcsstr used to be here gcspr_el0=%lx gcspr=%lx\n", gcs->gcspr_el0, gcspr);
+// 		}
+// 	}
+
+// 	val = ALIGN_DOWN(GCS_SIGNAL_CAP(gcspr), 8);
+// 	pr_debug("gcs: [0] GCSSTR VAL=%lx write at GCSPR=%lx\n", val, gcspr);
+// 	gcsstr(gcspr, val);
+
+// 	val = ALIGN_DOWN(GCS_SIGNAL_CAP(gcspr), 8) | 0x1;
+// 	pr_debug("gcs: [1] GCSSTR VAL=%lx write at GCSPR=%lx\n", val, gcspr);
+// 	gcsstr(gcspr, val);
+
+// 	jump_to = gcspr;
+// 	pr_debug("gcs: about to switch stacks via GCSSS1 to: %lx\n", jump_to);
+// 	gcsss1((unsigned long *) jump_to);
+
+// 	pr_debug("gcs: about to unmap gcs_data=%p size=%lx\n", gcs_data, gcs->vma_size + PAGE_SIZE);
+// 	// ret = sys_munmap(gcs_data, gcs->vma_size + PAGE_SIZE);
+// 	// if (ret < 0) {
+// 	// 	pr_err("Failed to unmap premmaped shadow stack\n");
+// 	// 	return ret;
+// 	// }
+// 	return 0;
+// }
 #define arch_shstk_restore gcs_restore
 
 static always_inline int gcs_switch_to_restorer(struct rst_shstk_info *gcs)
@@ -150,7 +283,10 @@ static always_inline int gcs_switch_to_restorer(struct rst_shstk_info *gcs)
 		return 0;
 	}
 
-	addr = gcs->premapped_addr + gcs->vma_size;
+	// addr = gcs->premapped_addr + gcs->vma_size;
+	pr_debug("gcs->premapped_addr + gcs->vma_size = %lx\n", gcs->premapped_addr + gcs->vma_size);
+	pr_debug("gcs->tmp_gcs = %lx", gcs->tmp_gcs);
+	addr = gcs->tmp_gcs;
 
 	if (addr % PAGE_SIZE != 0) {
 		pr_err("gcs: 0x%lx not page-aligned to size 0x%lx\n", addr, PAGE_SIZE);
@@ -161,9 +297,9 @@ static always_inline int gcs_switch_to_restorer(struct rst_shstk_info *gcs)
 	if (ret < 0) {
 		pr_err("gcs: Failed to unmap aarea for dumpee GCS VMAs");
 		return -1;
-	}
+}
 
-	gcspr = gcs_map(addr, PAGE_SIZE);
+	gcspr = gcs_map(addr, PAGE_SIZE, 0x01);
 
 	if (gcspr == -1) {
 		pr_err("gcs: failed to gcs_map(%lx, %lx)\n", (unsigned long) addr, PAGE_SIZE);
