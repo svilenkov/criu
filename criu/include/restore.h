@@ -40,7 +40,7 @@ static inline int arch_shstk_trampoline(struct pstree_item *item, CoreEntry *cor
 #endif
 
 #ifndef shstk_restorer_stack_size
-static always_inline long shstk_restorer_stack_size() { return 0; }
+static always_inline long shstk_restorer_stack_size(void) { return 0; }
 #endif
 
 #ifndef shstk_set_restorer_stack
