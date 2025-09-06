@@ -47,4 +47,8 @@ static always_inline long shstk_restorer_stack_size(void) { return 0; }
 static always_inline long shstk_set_restorer_stack(struct rst_shstk_info *info, void *ptr) { return 0; }
 #endif
 
+#ifndef shstk_min_mmap_addr
+static always_inline long shstk_min_mmap_addr(unsigned long def) { return def; }
+#endif
+
 #endif
