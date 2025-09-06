@@ -3214,6 +3214,7 @@ static int sigreturn_restore(pid_t pid, struct task_restore_args *task_args, uns
 			vdso_rt_size += vdso_maps_rt.sym.vvar_size;
 	}
 	task_args->bootstrap_len += vdso_rt_size;
+	task_args->bootstrap_len += shstk_restorer_stack_size();
 
 	/*
 	 * Restorer is a blob (code + args) that will get mapped in some
@@ -3465,6 +3466,11 @@ static int sigreturn_restore(pid_t pid, struct task_restore_args *task_args, uns
 	 * self-vmas are unmaped.
 	 */
 	mem += rst_mem_size;
+
+	shstk_set_restorer_stack(&task_args->shstk, mem);
+	pr_debug("set restorer shstk %p\n", mem);
+	mem += shstk_restorer_stack_size();
+
 	task_args->vdso_rt_parked_at = (unsigned long)mem;
 	task_args->vdso_maps_rt = vdso_maps_rt;
 	task_args->vdso_rt_size = vdso_rt_size;
