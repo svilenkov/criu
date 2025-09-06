@@ -158,6 +158,43 @@ static inline int shstk_finalize(void)
 }
 
 /*
+ * Restores original shadow stack VMA
+ *
+ * Steps:
+ *     1. Maps new temporary shadow stack content at a kernel-chosen address
+ *     2. Copy (pre-mapped shadow stack) -> (temporary shadow stack)
+ *     3. mremap (temporary shadow stack) -> (addr of the original shadow stack VMA)
+ */
+static always_inline int shstk_vma_restore(unsigned long *shstk_data, unsigned long vma_start, unsigned long vma_size)
+{
+	unsigned long shstk, tmp, i;
+	long ret;
+
+	shstk = sys_map_shadow_stack(0, vma_size, SHADOW_STACK_SET_TOKEN);
+	if (shstk < 0) {
+		pr_err("Failed to map shadow stack at %lx: %ld\n", shstk, shstk);
+		return -1;
+	}
+
+	/* restore shadow stack contents */
+	for (i = 0; i < vma_size / 8; i++)
+		wrssq(shstk + i * 8, shstk_data[i]);
+
+	ret = sys_munmap(shstk_data, vma_size);
+	if (ret < 0) {
+		pr_err("Failed to unmap premmaped shadow stack\n");
+		return ret;
+	}
+	tmp = sys_mremap(shstk, vma_size, vma_size, MREMAP_MAYMOVE | MREMAP_FIXED, vma_start);
+	if (tmp != vma_start) {
+		pr_err("Unable to remap %lx -> %lx: %lx\n", shstk, vma_start, tmp);
+		return -1;
+	}
+	return 0;
+}
+#define shstk_vma_restore shstk_vma_restore
+
+/*
  * Restore contents of the shadow stack and set shadow stack pointer
  */
 static always_inline int shstk_restore(struct rst_shstk_info *cet)

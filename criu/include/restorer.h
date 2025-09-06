@@ -357,4 +357,8 @@ static inline int arch_shstk_restore(struct rst_shstk_info *shstk)
 #define arch_shstk_restore arch_shstk_restore
 #endif
 
+#ifndef shstk_vma_restore
+static always_inline int shstk_vma_restore(unsigned long *shstk_data, unsigned long vma_start, unsigned long vma_size) { return 0; }
+#endif
+
 #endif /* __CR_RESTORER_H__ */
