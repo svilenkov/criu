@@ -22,6 +22,10 @@
 #define PR_SHADOW_STACK_PUSH		(1UL << 2)
 #endif
 
+#ifndef SHADOW_STACK_SET_TOKEN
+#define SHADOW_STACK_SET_TOKEN 0x1     /* Set up a restore token in the shadow stack */
+#endif
+
 #define PR_SHADOW_STACK_ALL_MODES \
 	PR_SHADOW_STACK_ENABLE | PR_SHADOW_STACK_WRITE | PR_SHADOW_STACK_PUSH
 

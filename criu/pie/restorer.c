@@ -1161,7 +1161,6 @@ static void dump_maps_to_filep(pid_t pid)
     int out = sys_open(filename, O_WRONLY | O_CREAT | O_APPEND, 0644);
 	std_sprintf(filename, "/tmp/criu-maps-%d.log", pid);
 
-
     if (in < 0 || out < 0)
 	goto done;
 
